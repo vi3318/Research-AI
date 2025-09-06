@@ -1,0 +1,2182 @@
+import React, { useEffect, useState, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { useUser, SignInButton, UserButton, useAuth } from '@clerk/clerk-react'
+import ReactMarkdown from 'react-markdown'
+import toast from 'react-hot-toast'
+import { 
+  HiDotsVertical, HiPencil, HiTrash, HiSearch, HiSparkles, HiLightningBolt,
+  HiDocumentText, HiChartBar, HiChatAlt2, HiX, HiPlus, HiArrowRight,
+  HiBookOpen, HiAcademicCap, HiBeaker, HiLightBulb
+} from 'react-icons/hi'
+import { useTheme } from '../contexts/ThemeContext'
+import ResearchGapVisualization from '../components/ResearchGapVisualization'
+import {
+  getChatSessions,
+  createChatSession,
+  getSessionMessages,
+  sendMessage,
+  getSessionContext,
+  addPapersToContext,
+  updateSession,
+  deleteSession,
+  setAuthToken,
+  api,
+  analyzePaper,
+  generateVisualization,
+  generateHypotheses,
+  generatePresentation,
+  exportPresentationToMarkdown
+} from '../lib/api'
+
+interface ChatSession {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  metadata?: any
+}
+
+interface Message {
+  id: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  metadata?: any
+  created_at: string
+}
+
+interface Paper {
+  title: string;
+  authors: string[] | string;
+  abstract: string;
+  doi?: string;
+  pdfUrl?: string;
+  url?: string;
+  source: string;
+  citationCount?: number;
+  relevanceScore?: number;
+  paper_id?: string; 
+  isOpenAccess?: boolean;
+  oaHostType?: string;
+}
+
+interface PaperContext {
+  id: string
+  paper_id: string
+  title: string
+  authors: string
+  abstract: string
+  content?: string
+  metadata?: any
+}
+
+export default function EnhancedChat() {
+  const { user, isLoaded } = useUser()
+  const { getToken } = useAuth()
+  const { theme, isDark } = useTheme()
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [newMessage, setNewMessage] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [isSearching, setIsSearching] = useState(false)
+  const [sessionContext, setSessionContext] = useState<PaperContext[]>([])
+  const [searchResults, setSearchResults] = useState<Paper[]>([])
+  const [selectedPaper, setSelectedPaper] = useState<Paper | null>(null)
+  const [gapAnalysis, setGapAnalysis] = useState<any>(null)
+  const [hypotheses, setHypotheses] = useState<any>(null)
+  const [activeView, setActiveView] = useState<'chat' | 'papers' | 'analysis'>('chat')
+  const [dropdownOpen, setDropdownOpen] = useState<string | null>(null)
+  const [editingSession, setEditingSession] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [taggedPaper, setTaggedPaper] = useState<Paper | null>(null)
+  const [isMobile, setIsMobile] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [researchMode, setResearchMode] = useState<'simple' | 'max'>('simple')
+  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // LocalStorage utilities for paper persistence
+  const saveSearchResultsToStorage = (papers: Paper[], sessionId: string) => {
+    try {
+      const key = `searchResults_${sessionId}`
+      localStorage.setItem(key, JSON.stringify(papers))
+      console.log(`Saved ${papers.length} papers to localStorage for session ${sessionId}`)
+    } catch (error) {
+      console.warn('Failed to save papers to localStorage:', error)
+    }
+  }
+
+  const loadSearchResultsFromStorage = (sessionId: string): Paper[] => {
+    try {
+      const key = `searchResults_${sessionId}`
+      const stored = localStorage.getItem(key)
+      if (stored) {
+        const papers = JSON.parse(stored)
+        console.log(`Loaded ${papers.length} papers from localStorage for session ${sessionId}`)
+        return papers
+      }
+    } catch (error) {
+      console.warn('Failed to load papers from localStorage:', error)
+    }
+    return []
+  }
+
+  const clearStoredSearchResults = (sessionId: string) => {
+    try {
+      const key = `searchResults_${sessionId}`
+      localStorage.removeItem(key)
+    } catch (error) {
+      console.warn('Failed to clear stored papers:', error)
+    }
+  }
+
+  // Responsive detection
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 768)
+      setSidebarCollapsed(window.innerWidth < 1024)
+    }
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
+
+  // Set up auth token when user changes
+  useEffect(() => {
+    if (isLoaded && user) {
+      getToken().then(token => {
+        setAuthToken(token)
+        loadSessions()
+      }).catch(err => {
+        console.error('Error getting token:', err)
+        toast.error('Authentication failed')
+      })
+    } else if (isLoaded && !user) {
+      setAuthToken(null)
+      setSessions([])
+      setActiveSession(null)
+      setMessages([])
+    }
+  }, [user, isLoaded])
+
+  // Auto-scroll to bottom of messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  // Load session context when active session changes
+  useEffect(() => {
+    if (activeSession && user && !isSearching) {
+      // Only load session data if we're not currently searching
+      // This prevents clearing messages during active search operations
+      loadSessionContext()
+      loadSessionMessages(activeSession.id)
+    }
+  }, [activeSession])
+
+  // Restore papers when switching to papers view or when session loads
+  useEffect(() => {
+    if (activeView === 'papers' && activeSession && searchResults.length === 0) {
+      // Try localStorage first (faster)
+      const storedPapers = loadSearchResultsFromStorage(activeSession.id)
+      if (storedPapers.length > 0) {
+        setSearchResults(storedPapers)
+        console.log(`Restored ${storedPapers.length} papers from localStorage`)
+        
+        // Also ensure papers are in backend session context for RAG analysis
+        addPapersToContext(activeSession.id, storedPapers)
+          .then(() => {
+            console.log(`Synced ${storedPapers.length} papers to backend session context`)
+          })
+          .catch(error => {
+            console.error('Failed to sync papers to backend session context:', error)
+          })
+        return
+      }
+
+      // Fallback to session context
+      if (sessionContext.length > 0) {
+        const restoredPapers: Paper[] = sessionContext.map(context => ({
+          title: context.title,
+          authors: context.authors,
+          abstract: context.abstract,
+          doi: context.paper_id,
+          url: context.paper_id,
+          paper_id: context.paper_id, // Preserve the original paper_id
+          source: context.metadata?.source || 'unknown',
+          citationCount: context.metadata?.citationCount || 0,
+          relevanceScore: context.metadata?.relevanceScore || 0,
+          year: context.metadata?.year,
+          publication: context.metadata?.publication,
+          pdfUrl: context.metadata?.pdfUrl
+        }))
+        setSearchResults(restoredPapers)
+        // Also save to localStorage for future use
+        saveSearchResultsToStorage(restoredPapers, activeSession.id)
+        console.log(`Restored ${restoredPapers.length} papers from session context`)
+      }
+    }
+  }, [activeView, activeSession, sessionContext])
+
+  const loadSessions = async () => {
+    try {
+      const data = await getChatSessions()
+      setSessions(data)
+    } catch (error) {
+      console.error('Error loading sessions:', error)
+      toast.error('Failed to load sessions')
+    }
+  }
+
+  const loadSessionMessages = async (sessionId: string, retryCount = 0) => {
+    try {
+      setLoading(true)
+      const data = await getSessionMessages(sessionId)
+      setMessages(data || [])
+      console.log(`Loaded ${data?.length || 0} messages for session ${sessionId}`)
+    } catch (error) {
+      console.error('Error loading messages:', error)
+      
+      // Retry logic for transient failures
+      if (retryCount < 2) {
+        console.log(`Retrying message load (attempt ${retryCount + 1})...`)
+        setTimeout(() => loadSessionMessages(sessionId, retryCount + 1), 1000)
+        return
+      }
+      
+      toast.error('Failed to load messages. Please refresh the page.')
+      // Fallback: Set empty messages array instead of leaving undefined
+      setMessages([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const loadSessionContext = async () => {
+    if (!activeSession) return
+    try {
+      const data = await getSessionContext(activeSession.id)
+      setSessionContext(data)
+      
+      // Always restore papers from session context if available
+      if (data.length > 0) {
+        // Convert PaperContext to Paper format for display
+        const restoredPapers: Paper[] = data.map(context => ({
+          title: context.title,
+          authors: context.authors,
+          abstract: context.abstract,
+          doi: context.paper_id,
+          url: context.paper_id,
+          paper_id: context.paper_id, // Preserve the original paper_id
+          source: context.metadata?.source || 'unknown',
+          citationCount: context.metadata?.citationCount || 0,
+          relevanceScore: context.metadata?.relevanceScore || 0,
+          year: context.metadata?.year,
+          publication: context.metadata?.publication,
+          pdfUrl: context.metadata?.pdfUrl
+        }))
+        setSearchResults(restoredPapers)
+        console.log(`Restored ${restoredPapers.length} papers from session context`)
+      }
+    } catch (error) {
+      console.error('Error loading session context:', error)
+    }
+  }
+
+  const handleCreateSession = async () => {
+    try {
+      const session = await createChatSession('New Chat')
+      setSessions(prev => [session, ...prev])
+      setActiveSession(session)
+      setMessages([])
+      setSearchResults([])
+      setGapAnalysis(null)
+      setTaggedPaper(null)
+      toast.success('New research session created!')
+    } catch (error) {
+      console.error('Error creating session:', error)
+      toast.error('Failed to create session')
+    }
+  }
+
+  const handleSelectSession = async (session: ChatSession) => {
+    if (activeSession?.id === session.id) return // Already active
+    
+    try {
+      setActiveSession(session)
+      setMessages([]) // Clear immediately for better UX
+      // Don't clear searchResults here - let loadSessionContext restore them
+      setSelectedPaper(null)
+      setGapAnalysis(null)
+      setTaggedPaper(null)
+      setActiveView('chat')
+      if (isMobile) setSidebarCollapsed(true)
+      
+      // Load session data in parallel
+      await Promise.all([
+        loadSessionMessages(session.id),
+        loadSessionContext()
+      ])
+      
+      toast.success(`Switched to "${session.title}"`)
+    } catch (error) {
+      console.error('Error switching session:', error)
+      toast.error('Failed to switch session')
+    }
+  }
+
+  const handleResearchQuery = async () => {
+    if (!newMessage.trim() || loading) return
+
+    // If there's a tagged paper, handle it as a paper question
+    if (taggedPaper) {
+      await handlePaperQuestion(newMessage.trim())
+      return
+    }
+
+    setLoading(true)
+    setIsSearching(true) // Prevent session reloading during search
+    
+    // Auto-update session title if it's still "New Chat"
+    if (activeSession && activeSession.title === 'New Chat' && newMessage.trim()) {
+      try {
+        const titleWords = newMessage.trim()
+          .split(' ')
+          .filter(word => word.length > 2)
+          .slice(0, 4)
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ')
+        
+        const newTitle = titleWords || 'Research Session'
+        await updateSession(activeSession.id, { title: newTitle })
+        
+        // Update local state
+        setActiveSession(prev => prev ? { ...prev, title: newTitle } : prev)
+        setSessions(prev => prev.map(s => 
+          s.id === activeSession.id ? { ...s, title: newTitle } : s
+        ))
+        
+        console.log(`Updated session title to: "${newTitle}"`)
+      } catch (error) {
+        console.error('Failed to update session title:', error)
+      }
+    }
+    
+    // Add user message immediately
+    const userMessage = {
+      id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      role: 'user' as const,
+      content: newMessage.trim(),
+      metadata: { type: 'research_query' },
+      created_at: new Date().toISOString()
+    }
+    
+    setMessages(prev => [...prev, userMessage])
+    
+    // Note: Don't save user message to backend here since the search API will handle it
+    
+    // Add initial search status message
+    const searchMessageId = `search-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    const initialSearchMessage = {
+      id: searchMessageId,
+      role: 'assistant' as const,
+      content: '🔍 **Starting enhanced multi-source search...**\n\n' +
+               '⏳ Initializing search across multiple databases...',
+      metadata: { 
+        type: 'search_progress',
+        isProgress: true 
+      },
+      created_at: new Date().toISOString()
+    }
+    
+    setMessages(prev => [...prev, initialSearchMessage])
+    
+    const searchSteps = [
+      { step: 'Searching Google Scholar...', icon: '📚' },
+      { step: 'Searching OpenAlex...', icon: '🔬' },
+      { step: 'Searching ArXiv...', icon: '📄' },
+      { step: 'Searching PubMed...', icon: '🏥' },
+      { step: 'Processing results...', icon: '⚙️' },
+      { step: 'Removing duplicates...', icon: '🔄' },
+      { step: 'Enriching metadata...', icon: '✨' }
+    ]
+    
+    let currentStep = 0
+    
+    const updateSearchProgress = () => {
+      if (currentStep < searchSteps.length) {
+        const step = searchSteps[currentStep]
+        const progressContent = `🔍 **Enhanced Multi-Source Search**\n\n` +
+          searchSteps.slice(0, currentStep + 1).map((s, i) => 
+            i === currentStep 
+              ? `${s.icon} ${s.step} ⏳`
+              : `✅ ${s.step}`
+          ).join('\n') +
+          (currentStep < searchSteps.length - 1 ? '\n\n⏳ Search in progress...' : '')
+        
+        setMessages(prev => prev.map(msg => 
+          msg.id === searchMessageId 
+            ? { ...msg, content: progressContent }
+            : msg
+        ))
+        currentStep++
+      }
+    }
+    
+    // Start progress updates (faster for better perceived performance)
+    updateSearchProgress()
+    const progressInterval = setInterval(updateSearchProgress, 500) // Faster updates
+    
+    try {
+      // Clear old papers when starting new research (only if we actually have new search)
+      setSearchResults([])
+      setGapAnalysis(null)
+      
+      // Use the enhanced multi-source search endpoint
+      const maxResults = researchMode === 'simple' ? 10 : 40
+      const response = await api.post('/api/research/search', {
+        query: newMessage.trim(),
+        limit: maxResults
+      })
+
+      const data = response.data
+      clearInterval(progressInterval)
+
+      // Update final search message with results
+      const finalSearchContent = `🎉 **Search Complete!**\n\n` +
+        `✅ Found **${data.papers?.length || 0}** papers from **${data.sources.length}** sources:\n` +
+        data.sources.map(source => `• ${source}`).join('\n') +
+        `\n\n⚡ Search completed in **${data.searchTime}ms**\n` +
+        `📊 Results are displayed in the Papers tab →`
+
+      setMessages(prev => prev.map(msg => 
+        msg.id === searchMessageId 
+          ? { 
+              ...msg, 
+              content: finalSearchContent,
+              metadata: { 
+                type: 'search_complete',
+                paperCount: data.totalFound,
+                sources: data.sources,
+                searchTime: data.searchTime
+              }
+            }
+          : msg
+      ))
+
+      // Note: Don't save search completion to backend - the search API already handles persistence
+
+      // Update search results
+      if (data.papers && data.papers.length > 0) {
+        console.log(`Setting ${data.papers.length} search results`)
+        
+        // Set results and switch view immediately
+        setSearchResults(data.papers)
+        setActiveView('papers')
+        
+        // Save to localStorage for persistence
+        if (activeSession) {
+          saveSearchResultsToStorage(data.papers, activeSession.id)
+          // Add papers to backend session context for RAG analysis (non-blocking)
+          addPapersToContext(activeSession.id, data.papers)
+            .then(() => console.log(`Added ${data.papers.length} papers to backend session context`))
+            .catch(contextError => console.error('Failed to add papers to backend session context:', contextError))
+        }
+      }
+
+      setNewMessage('')
+      
+    } catch (error: any) {
+      clearInterval(progressInterval)
+      console.error('Enhanced search error:', error)
+      
+      // Update search message with error and try fallback
+      setMessages(prev => prev.map(msg => 
+        msg.id === searchMessageId 
+          ? { 
+              ...msg, 
+              content: `⚠️ **Enhanced search failed, trying alternative method...**\n\n🔄 Switching to backup search system...`
+            }
+          : msg
+      ))
+      
+      // Fallback to old search if enhanced search fails
+      try {        
+        const response = await api.post('/api/enhanced-research/chat', {
+          message: newMessage.trim(),
+          sessionId: activeSession?.id,
+          analysisType: 'comprehensive',
+          maxResults: researchMode === 'simple' ? 10 : 40
+        })
+
+        const data = response.data
+
+        // Update message with fallback results
+        setMessages(prev => prev.map(msg => 
+          msg.id === searchMessageId 
+            ? { 
+                ...msg, 
+                content: `✅ **Search Complete (via backup system)**\n\n${data.summary}\n\n📊 Found ${data.papers?.length || 0} papers`
+              }
+            : msg
+        ))
+
+        // Update search results and analysis
+        if (data.papers && data.papers.length > 0) {
+          console.log(`Setting ${data.papers.length} fallback search results`)
+          
+          // Set results and switch view immediately
+          setSearchResults(data.papers)
+          setActiveView('papers')
+          
+          // Save to localStorage for persistence
+          if (activeSession) {
+            saveSearchResultsToStorage(data.papers, activeSession.id)
+          }
+        }
+        setGapAnalysis(data.gapAnalysis)
+        
+        // Update session if it was created (but don't reload messages during active search)
+        if (data.sessionId && !activeSession) {
+          const newSession = await getChatSessions()
+          const createdSession = newSession.find(s => s.id === data.sessionId)
+          if (createdSession) {
+            // Set session without triggering message reload (we already have the messages in state)
+            setActiveSession(createdSession)
+            setSessions(prev => [createdSession, ...prev.filter(s => s.id !== createdSession.id)])
+            console.log('Set new session without reloading messages during search')
+          }
+        }
+        
+        // Update session context with new papers
+        if (activeSession && data.papers) {
+          await loadSessionContext()
+        }
+        
+        // Update session timestamp
+        setSessions(prev => prev.map(s => 
+          s.id === (activeSession?.id || data.sessionId)
+            ? { ...s, updated_at: new Date().toISOString() }
+            : s
+        ))
+
+        setNewMessage('')
+        setTaggedPaper(null)
+        
+      } catch (fallbackError: any) {
+        console.error('Fallback search also failed:', fallbackError)
+        
+        // Update message with final error
+        setMessages(prev => prev.map(msg => 
+          msg.id === searchMessageId 
+            ? { 
+                ...msg, 
+                content: `❌ **Search Failed**\n\nBoth primary and backup search systems failed.\n\nError: ${fallbackError.response?.data?.error || fallbackError.message || 'Unknown error'}\n\nPlease try again with a different query.`
+              }
+            : msg
+        ))
+      }
+    }
+    setLoading(false)
+    setIsSearching(false) // Allow session reloading again
+  }
+
+  const handlePaperTag = (paper: Paper) => {
+    setTaggedPaper(paper)
+    setActiveView('chat')
+    setNewMessage('')
+    inputRef.current?.focus()
+    toast.success(`Tagged paper: ${paper.title.substring(0, 50)}...`)
+  }
+
+  const handlePaperQuestion = async (question: string) => {
+    if (!taggedPaper || !question.trim() || !activeSession) {
+      toast.error('Please tag a paper first and enter a question')
+      return
+    }
+
+    setLoading(true)
+    const loadingToast = toast.loading('🤔 Analyzing paper...')
+    
+    try {
+      // Use paper_id if available, otherwise fall back to other identifiers
+      let paperId = taggedPaper.paper_id || taggedPaper.doi || taggedPaper.url || taggedPaper.title
+      
+      console.log('Analyzing paper with ID:', paperId)
+      console.log('Paper details:', {
+        title: taggedPaper.title,
+        doi: taggedPaper.doi,
+        url: taggedPaper.url,
+        paper_id: taggedPaper.paper_id
+      })
+
+      const data = await analyzePaper(
+        paperId,
+        question.trim(),
+        activeSession.id
+      )
+
+      toast.dismiss(loadingToast)
+
+      setMessages(prev => [
+        ...prev,
+        {
+          id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          role: 'user',
+          content: `@${taggedPaper.title}: ${question}`,
+          metadata: { type: 'paper_question', paperId: data.paperId },
+          created_at: new Date().toISOString()
+        },
+        {
+          id: `assistant-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          role: 'assistant',
+          content: data.analysis,
+          metadata: { type: 'paper_analysis', paperId: data.paperId },
+          created_at: new Date().toISOString()
+        }
+      ])
+
+      // Note: Paper analysis messages are handled by the backend API, no need to save separately
+
+      setNewMessage('')
+      setTaggedPaper(null)
+      toast.success('Paper analysis complete!')
+    } catch (error: any) {
+      toast.dismiss(loadingToast)
+      console.error('Error analyzing paper:', error)
+      
+      // Provide more specific error messages based on the error type
+      if (error.response?.status === 404) {
+        toast.error('Analysis temporarily unavailable. Try again in a moment.')
+        
+        // Add helpful error message to chat
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `error-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            role: 'assistant',
+            content: `⚠️ **Analysis Temporarily Unavailable**\n\nThe paper "${taggedPaper.title}" analysis failed. This usually resolves quickly.\n\n**Quick fixes:**\n• Try again in a few seconds\n• Refresh the page and retry\n• Check if the paper is still in your results\n\nThe system is working on indexing your papers for optimal performance.`,
+            metadata: { type: 'error' },
+            created_at: new Date().toISOString()
+          }
+        ])
+      } else if (error.response?.status === 500) {
+        toast.error('Server error during analysis. Please try again.')
+      } else if (error.message?.includes('analysis')) {
+        toast.error('Failed to analyze paper. Please try again.')
+      } else {
+        toast.error('Paper analysis failed. Please try again.')
+        
+        // Add generic error message to chat
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `error-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            role: 'assistant',
+            content: `❌ **Analysis Failed**\n\nUnable to analyze the paper "${taggedPaper.title}".\n\nError: ${error.message || 'Unknown error'}\n\nPlease try again or contact support.`,
+            metadata: { type: 'error' },
+            created_at: new Date().toISOString()
+          }
+        ])
+      }
+    }
+    setLoading(false)
+  }
+
+  const handleGenerateVisualization = async () => {
+    if (!activeSession) return
+
+    setLoading(true)
+    const loadingToast = toast.loading('📊 Generating research gap analysis...')
+    
+    try {
+      const data = await generateVisualization(activeSession.id, 'comprehensive')
+
+      setGapAnalysis(data.gapAnalysis)
+      setActiveView('analysis')
+      toast.dismiss(loadingToast)
+      toast.success('Research gap analysis generated!')
+    } catch (error) {
+      toast.dismiss(loadingToast)
+      console.error('Error generating visualization:', error)
+      toast.error('Failed to generate analysis')
+    }
+    setLoading(false)
+  }
+
+  const handleGenerateHypotheses = async () => {
+    if (!activeSession) return
+
+    setLoading(true)
+    const loadingToast = toast.loading('🧪 Generating novel research hypotheses...')
+    
+    try {
+      const data = await generateHypotheses(activeSession.id, 'AI Research')
+      setHypotheses(data)
+      setActiveView('analysis')
+      toast.dismiss(loadingToast)
+      toast.success(`Generated ${data.hypotheses.length} novel hypotheses!`)
+    } catch (error) {
+      toast.dismiss(loadingToast)
+      console.error('Error generating hypotheses:', error)
+      toast.error('Failed to generate hypotheses')
+    }
+    setLoading(false)
+  }
+
+  const handleGeneratePresentation = async (paper: Paper) => {
+    setLoading(true)
+    const loadingToast = toast.loading('🎯 Generating PowerPoint presentation...')
+    
+    try {
+      const data = await generatePresentation(paper, { extractPdfContent: true })
+      
+      if (data.success && data.presentation) {
+        // Export to Markdown for easy viewing
+        const markdown = await exportPresentationToMarkdown(data.presentation)
+        
+        // Create a downloadable markdown file
+        const blob = new Blob([markdown.markdown], { type: 'text/markdown' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `presentation-${paper.title.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '-')}.md`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        
+        toast.dismiss(loadingToast)
+        toast.success('Presentation generated and downloaded!')
+        
+        // Add message to chat about the presentation
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: `🎯 **PowerPoint Presentation Generated!**\n\nI've created a comprehensive presentation for **"${paper.title}"** with the following slides:\n\n1. **Title & Authors**\n2. **Abstract Summary**\n3. **Research Problem & Motivation**\n4. **Methodology Overview**\n5. **Key Results & Findings**\n6. **Research Gaps Identified**\n7. **Conclusions & Future Work**\n8. **References & Citations**\n\n📥 The presentation has been downloaded as a Markdown file that you can easily convert to PowerPoint or use directly.`,
+            metadata: { type: 'presentation_generated', paperId: paper.doi || paper.title },
+            created_at: new Date().toISOString()
+          }
+        ])
+      } else {
+        throw new Error('Failed to generate presentation')
+      }
+    } catch (error) {
+      toast.dismiss(loadingToast)
+      console.error('Error generating presentation:', error)
+      toast.error('Failed to generate presentation')
+    }
+    setLoading(false)
+  }
+
+  const handlePDFUpload = async (file: File) => {
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+      toast.error('File too large. Please upload a PDF under 10MB.')
+      return
+    }
+
+    setLoading(true)
+    const loadingToast = toast.loading('📄 Processing PDF and generating presentation...')
+    
+    try {
+      // Convert file to base64 for processing
+      const base64 = await new Promise<string>((resolve) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result as string)
+        reader.readAsDataURL(file)
+      })
+
+      // Create a paper object from the uploaded PDF
+      const uploadedPaper: Paper = {
+        title: file.name.replace('.pdf', ''),
+        authors: ['Uploaded PDF'],
+        abstract: 'Content extracted from uploaded PDF',
+        source: 'uploaded',
+        pdfUrl: base64,
+        url: base64
+      }
+
+      const data = await generatePresentation(uploadedPaper, { extractPdfContent: true })
+      
+      if (data.success && data.presentation) {
+        // Export to Markdown
+        const markdown = await exportPresentationToMarkdown(data.presentation)
+        
+        // Download the presentation
+        const blob = new Blob([markdown.markdown], { type: 'text/markdown' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `presentation-${file.name.replace('.pdf', '')}.md`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        
+        toast.dismiss(loadingToast)
+        toast.success('Presentation generated and downloaded!')
+        
+        // Add message to chat
+        setMessages(prev => [
+          ...prev,
+          {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: `🎯 **PowerPoint Presentation Generated from Upload!**\n\nI've created a comprehensive presentation for **"${file.name}"** with ${data.presentation.slides.length} structured slides.\n\n📥 The presentation has been downloaded as a Markdown file that you can easily convert to PowerPoint or use directly.`,
+            metadata: { type: 'presentation_generated', paperId: file.name },
+            created_at: new Date().toISOString()
+          }
+        ])
+      } else {
+        throw new Error('Failed to generate presentation')
+      }
+    } catch (error) {
+      toast.dismiss(loadingToast)
+      console.error('Error processing PDF:', error)
+      toast.error('Failed to process PDF and generate presentation')
+    }
+    setLoading(false)
+  }
+
+  const handleGeneratePresentationFromContext = async (paperContext: PaperContext) => {
+    // Convert PaperContext to Paper format
+    const paper: Paper = {
+      title: paperContext.title,
+      authors: paperContext.authors,
+      abstract: paperContext.abstract,
+      doi: paperContext.paper_id,
+      source: 'session',
+      url: paperContext.paper_id
+    }
+    
+    await handleGeneratePresentation(paper)
+  }
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleResearchQuery()
+    }
+  }
+
+  const handleSessionRename = async (sessionId: string, newTitle: string) => {
+    try {
+      await updateSession(sessionId, newTitle)
+      setSessions(prev => prev.map(s => 
+        s.id === sessionId ? { ...s, title: newTitle } : s
+      ))
+      if (activeSession?.id === sessionId) {
+        setActiveSession(prev => prev ? { ...prev, title: newTitle } : null)
+      }
+      setEditingSession(null)
+      toast.success('Session renamed!')
+    } catch (error) {
+      console.error('Error renaming session:', error)
+      toast.error('Failed to rename session')
+    }
+  }
+
+  const handleSessionDelete = async (sessionId: string) => {
+    try {
+      await deleteSession(sessionId)
+      setSessions(prev => prev.filter(s => s.id !== sessionId))
+      // Clear localStorage for this session
+      clearStoredSearchResults(sessionId)
+      if (activeSession?.id === sessionId) {
+        setActiveSession(null)
+        setMessages([])
+        setSearchResults([])
+        setGapAnalysis(null)
+      }
+      toast.success('Session deleted!')
+    } catch (error) {
+      console.error('Error deleting session:', error)
+      toast.error('Failed to delete session')
+    }
+  }
+
+  if (!isLoaded) {
+    return (
+      <div className="flex items-center justify-center h-screen" style={{ backgroundColor: theme.colors.background }}>
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+          className="rounded-full h-12 w-12 border-b-2"
+          style={{ borderColor: theme.colors.primary }}
+        />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div 
+        className="flex flex-col items-center justify-center min-h-screen px-4"
+        style={{ 
+          backgroundColor: theme.colors.background,
+          color: theme.colors.textPrimary 
+        }}
+      >
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center space-y-8 max-w-md w-full"
+        >
+          <motion.div 
+            className="h-20 w-20 rounded-full mx-auto flex items-center justify-center"
+            style={{ 
+              background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.accent})` 
+            }}
+            animate={{ 
+              boxShadow: [
+                `0 0 20px ${theme.colors.primary}40`,
+                `0 0 40px ${theme.colors.primary}60`,
+                `0 0 20px ${theme.colors.primary}40`
+              ]
+            }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            <HiSparkles className="h-10 w-10 text-white" />
+          </motion.div>
+          <div>
+            <h1 
+              className="text-4xl font-bold mb-4"
+              style={{ 
+                background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.accent})`,
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text'
+              }}
+            >
+              Welcome to ResearchAI
+            </h1>
+            <p className="mb-8" style={{ color: theme.colors.textSecondary }}>
+              Your intelligent research assistant. Sign in to begin.
+            </p>
+            <SignInButton mode="modal">
+              <motion.button
+                className="inline-flex items-center gap-2 px-6 py-3 text-lg rounded-lg font-semibold text-white shadow-lg"
+                style={{ 
+                  background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <HiLightningBolt className="mr-2" />
+                Get Started
+              </motion.button>
+            </SignInButton>
+          </div>
+        </motion.div>
+      </div>
+    )
+  }
+
+  return (
+    <div 
+      className="h-screen flex overflow-hidden"
+      style={{ backgroundColor: theme.colors.background }}
+    >
+      {/* Sidebar */}
+      <AnimatePresence>
+        {!sidebarCollapsed && (
+          <motion.div 
+            initial={{ x: -300 }}
+            animate={{ x: 0 }}
+            exit={{ x: -300 }}
+            className={`${isMobile ? 'fixed inset-y-0 left-0 z-50' : 'relative'} w-80 flex flex-col border-r`}
+            style={{ 
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border
+            }}
+          >
+            {/* Header */}
+            <div 
+              className="p-4 border-b flex items-center justify-between"
+              style={{ borderColor: theme.colors.border }}
+            >
+              <h2 className="font-semibold text-lg" style={{ color: theme.colors.textPrimary }}>
+                Research Sessions
+              </h2>
+              <div className="flex items-center gap-2">
+                <motion.button 
+                  onClick={handleCreateSession} 
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg font-medium text-white shadow-sm"
+                  style={{ 
+                    background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                  }}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  <HiPlus className="h-4 w-4" />
+                  New
+                </motion.button>
+                {isMobile && (
+                  <motion.button
+                    onClick={() => setSidebarCollapsed(true)}
+                    className="p-1.5 rounded-lg"
+                    style={{ backgroundColor: theme.colors.background }}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <HiX className="h-4 w-4" style={{ color: theme.colors.textSecondary }} />
+                  </motion.button>
+                )}
+                <UserButton afterSignOutUrl="/" />
+              </div>
+            </div>
+
+            {/* Sessions list */}
+            <div className="flex-1 overflow-y-auto">
+              <AnimatePresence>
+                {sessions.map((session, index) => (
+                  <motion.div
+                    key={session.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    transition={{ delay: index * 0.05 }}
+                    className={`group relative p-3 border-b cursor-pointer transition-all ${
+                      activeSession?.id === session.id ? 'border-l-4' : ''
+                    }`}
+                    style={{ 
+                      borderColor: theme.colors.border,
+                      borderLeftColor: activeSession?.id === session.id ? theme.colors.primary : 'transparent',
+                      backgroundColor: activeSession?.id === session.id ? `${theme.colors.primary}10` : 'transparent'
+                    }}
+                    onClick={() => handleSelectSession(session)}
+                    whileHover={{ backgroundColor: `${theme.colors.primary}05` }}
+                  >
+                    <div className="flex items-center justify-between">
+                      {editingSession === session.id ? (
+                        <input
+                          value={editTitle}
+                          onChange={(e) => setEditTitle(e.target.value)}
+                          onBlur={() => {
+                            if (editTitle.trim() && editTitle !== session.title) {
+                              handleSessionRename(session.id, editTitle.trim())
+                            } else {
+                              setEditingSession(null)
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              if (editTitle.trim() && editTitle !== session.title) {
+                                handleSessionRename(session.id, editTitle.trim())
+                              } else {
+                                setEditingSession(null)
+                              }
+                            } else if (e.key === 'Escape') {
+                              setEditingSession(null)
+                              setEditTitle(session.title)
+                            }
+                          }}
+                                                      className="text-sm font-medium flex-1 mr-2 px-2 py-1 rounded border focus:outline-none focus:ring-1"
+                            style={{ 
+                              backgroundColor: theme.colors.background,
+                              borderColor: theme.colors.primary,
+                              color: theme.colors.textPrimary
+                            }}
+                          autoFocus
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div 
+                          className="font-medium text-sm truncate flex-1"
+                          style={{ color: theme.colors.textPrimary }}
+                        >
+                          {session.title}
+                        </div>
+                      )}
+                      
+                      <div className="relative">
+                        <motion.button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDropdownOpen(dropdownOpen === session.id ? null : session.id)
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-1 rounded transition-all"
+                          style={{ backgroundColor: `${theme.colors.textSecondary}20` }}
+                          whileHover={{ scale: 1.1 }}
+                        >
+                          <HiDotsVertical 
+                            className="h-4 w-4" 
+                            style={{ color: theme.colors.textSecondary }} 
+                          />
+                        </motion.button>
+                        
+                        <AnimatePresence>
+                          {dropdownOpen === session.id && (
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                              animate={{ opacity: 1, scale: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                              className="absolute right-0 top-8 rounded-lg shadow-xl z-50 min-w-[120px] border"
+                              style={{ 
+                                backgroundColor: theme.colors.surface,
+                                borderColor: theme.colors.border
+                              }}
+                            >
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setEditingSession(session.id)
+                                  setEditTitle(session.title)
+                                  setDropdownOpen(null)
+                                }}
+                                className="flex items-center gap-2 px-3 py-2 text-sm w-full text-left rounded-t-lg transition-colors"
+                                style={{ 
+                                  color: theme.colors.textPrimary
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = `${theme.colors.primary}10`
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'transparent'
+                                }}
+                              >
+                                <HiPencil className="h-3 w-3" />
+                                Rename
+                              </button>
+                              <motion.button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (window.confirm(`Delete "${session.title}"? This action cannot be undone.`)) {
+                                    handleSessionDelete(session.id)
+                                  }
+                                  setDropdownOpen(null)
+                                }}
+                                className="flex items-center gap-2 px-3 py-2 text-sm w-full text-left rounded-b-lg transition-colors"
+                                style={{ 
+                                  color: theme.colors.error
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = `${theme.colors.error}10`
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'transparent'
+                                }}
+                                whileHover={{ scale: 1.02 }}
+                                whileTap={{ scale: 0.98 }}
+                              >
+                                <HiTrash className="h-3 w-3" />
+                                Delete
+                              </motion.button>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+                    
+                    <div 
+                      className="text-xs mt-1"
+                      style={{ color: theme.colors.textMuted }}
+                    >
+                      {new Date(session.updated_at).toLocaleDateString()}
+                    </div>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Mobile overlay */}
+      {isMobile && !sidebarCollapsed && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 bg-black bg-opacity-50 z-40"
+          onClick={() => setSidebarCollapsed(true)}
+        />
+      )}
+
+      {/* Main area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {activeSession ? (
+          <>
+            {/* Header */}
+            <motion.div 
+              initial={{ y: -20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              className="p-4 border-b flex items-center justify-between"
+              style={{ 
+                backgroundColor: `${theme.colors.surface}80`,
+                borderColor: theme.colors.border,
+                backdropFilter: 'blur(8px)'
+              }}
+            >
+              <div className="flex items-center gap-3">
+                {sidebarCollapsed && (
+                  <motion.button
+                    onClick={() => setSidebarCollapsed(false)}
+                    className="p-2 rounded-lg"
+                    style={{ backgroundColor: `${theme.colors.primary}10` }}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <HiChatAlt2 className="h-5 w-5" style={{ color: theme.colors.primary }} />
+                  </motion.button>
+                )}
+                <div>
+                  <h3 className="font-semibold text-xl" style={{ color: theme.colors.textPrimary }}>
+                    {activeSession.title}
+                  </h3>
+                  <div className="text-sm flex gap-4 mt-1" style={{ color: theme.colors.textSecondary }}>
+                    <span className="flex items-center gap-1">
+                      <HiDocumentText className="h-3 w-3" />
+                      {sessionContext.length} papers in context
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <HiSearch className="h-3 w-3" />
+                      {searchResults.length} papers found
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {['chat', 'papers', 'analysis'].map((view) => (
+                  <motion.button
+                    key={view}
+                    onClick={() => setActiveView(view as any)}
+                    className="px-4 py-2 rounded-lg text-sm font-medium transition-all capitalize flex items-center gap-2"
+                    style={{
+                      backgroundColor: activeView === view ? theme.colors.primary : `${theme.colors.primary}10`,
+                      color: activeView === view ? 'white' : theme.colors.primary
+                    }}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    {view === 'chat' && <HiChatAlt2 className="h-4 w-4" />}
+                    {view === 'papers' && <HiDocumentText className="h-4 w-4" />}
+                    {view === 'analysis' && <HiChartBar className="h-4 w-4" />}
+                    {view}
+                    {view === 'papers' && searchResults.length > 0 && (
+                      <span className="ml-1 px-2 py-0.5 text-xs rounded-full bg-white bg-opacity-20">
+                        {searchResults.length}
+                      </span>
+                    )}
+                  </motion.button>
+                ))}
+              </div>
+            </motion.div>
+
+            {/* Content area */}
+            <div className="flex-1 overflow-hidden">
+              <AnimatePresence mode="wait">
+                {activeView === 'chat' && (
+                  <motion.div
+                    key="chat"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 20 }}
+                    className="h-full flex flex-col"
+                  >
+                    {/* Messages */}
+                    <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+                      <AnimatePresence>
+                        {messages.map((message, index) => (
+                          <motion.div
+                            key={message.id || `msg-${index}`}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: index * 0.1 }}
+                            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                          >
+                            <div
+                              className={`max-w-4xl p-4 rounded-2xl shadow-sm border ${
+                                message.role === 'user'
+                                  ? 'ml-4 md:ml-12 text-white'
+                                  : 'mr-4 md:mr-12'
+                              }`}
+                              style={{
+                                backgroundColor: message.role === 'user' 
+                                  ? theme.colors.primary
+                                  : theme.colors.surface,
+                                borderColor: theme.colors.border,
+                                color: message.role === 'user' ? 'white' : theme.colors.textPrimary,
+                                background: message.role === 'user' 
+                                  ? `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})`
+                                  : theme.colors.surface
+                              }}
+                            >
+                              {message.role === 'assistant' ? (
+                                <ReactMarkdown 
+                                  className="prose prose-sm max-w-none"
+                                  components={{
+                                    p: ({ children }) => <p style={{ color: theme.colors.textPrimary }}>{children}</p>,
+                                    strong: ({ children }) => <strong style={{ color: theme.colors.textPrimary }}>{children}</strong>,
+                                    em: ({ children }) => <em style={{ color: theme.colors.textSecondary }}>{children}</em>,
+                                    li: ({ children }) => <li style={{ color: theme.colors.textPrimary }}>{children}</li>,
+                                    h1: ({ children }) => <h1 style={{ color: theme.colors.textPrimary }}>{children}</h1>,
+                                    h2: ({ children }) => <h2 style={{ color: theme.colors.textPrimary }}>{children}</h2>,
+                                    h3: ({ children }) => <h3 style={{ color: theme.colors.textPrimary }}>{children}</h3>,
+                                  }}
+                                >
+                                  {message.content}
+                                </ReactMarkdown>
+                              ) : (
+                                <p className="whitespace-pre-wrap">{message.content}</p>
+                              )}
+                              <div className="text-xs opacity-70 mt-3 flex items-center gap-2">
+                                {new Date(message.created_at).toLocaleTimeString()}
+                                {message.metadata?.type && (
+                                  <span 
+                                    className="px-2 py-1 rounded-full text-xs"
+                                    style={{ backgroundColor: 'rgba(0,0,0,0.2)' }}
+                                  >
+                                    {message.metadata.type.replace('_', ' ')}
+                                  </span>
+                                )}
+                                {message.metadata?.paperCount && (
+                                  <span className="text-xs flex items-center gap-1">
+                                    <HiDocumentText className="h-3 w-3" />
+                                    {message.metadata.paperCount} papers
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </AnimatePresence>
+                      <div ref={messagesEndRef} />
+                    </div>
+
+                    {/* Tagged paper indicator */}
+                    <AnimatePresence>
+                      {taggedPaper && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 10 }}
+                          className="px-4 py-2 mx-4 md:mx-6 mb-2 rounded-lg border flex items-center justify-between"
+                          style={{ 
+                            backgroundColor: `${theme.colors.accent}10`,
+                            borderColor: theme.colors.accent
+                          }}
+                        >
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <HiBookOpen 
+                              className="h-4 w-4 flex-shrink-0" 
+                              style={{ color: theme.colors.accent }} 
+                            />
+                            <span 
+                              className="text-sm font-medium truncate"
+                              style={{ color: theme.colors.textPrimary }}
+                            >
+                              @{taggedPaper.title}
+                            </span>
+                          </div>
+                          <motion.button
+                            onClick={() => setTaggedPaper(null)}
+                            className="p-1 rounded"
+                            style={{ color: theme.colors.textSecondary }}
+                            whileHover={{ scale: 1.1 }}
+                            whileTap={{ scale: 0.9 }}
+                          >
+                            <HiX className="h-4 w-4" />
+                          </motion.button>
+                        </motion.div>
+                      )}
+                      
+                      {/* Contextual Question Suggestions */}
+                      {taggedPaper && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: 10 }}
+                          className="px-4 md:px-6 mb-2"
+                        >
+                          <p className="text-xs mb-2" style={{ color: theme.colors.textSecondary }}>
+                            💡 Try asking:
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {[
+                              "What is the main contribution?",
+                              "What methodology was used?",
+                              "What are the key findings?",
+                              "What are the limitations?",
+                              "How does this relate to other work?",
+                              "What future work is suggested?"
+                            ].map((suggestion, i) => (
+                              <motion.button
+                                key={`suggestion-${i}-${suggestion.slice(0, 10)}`}
+                                onClick={() => setNewMessage(suggestion)}
+                                className="text-xs px-3 py-1.5 rounded-full transition-colors"
+                                style={{
+                                  backgroundColor: `${theme.colors.primary}10`,
+                                  color: theme.colors.primary
+                                }}
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                                initial={{ opacity: 0, scale: 0.8 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                transition={{ delay: i * 0.05 }}
+                              >
+                                {suggestion}
+                              </motion.button>
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Research Mode Toggle */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="px-4 md:px-6 py-3 border-t"
+                      style={{ 
+                        backgroundColor: `${theme.colors.surface}60`,
+                        borderColor: theme.colors.border,
+                        backdropFilter: 'blur(12px)'
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium" style={{ color: theme.colors.textSecondary }}>
+                          Research Mode
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <motion.button
+                            onClick={() => setResearchMode('simple')}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
+                              researchMode === 'simple' ? 'text-white' : ''
+                            }`}
+                            style={{
+                              backgroundColor: researchMode === 'simple' ? theme.colors.success : `${theme.colors.success}20`,
+                              color: researchMode === 'simple' ? 'white' : theme.colors.success
+                            }}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            Simple (10 papers)
+                          </motion.button>
+                          <motion.button
+                            onClick={() => setResearchMode('max')}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all ${
+                              researchMode === 'max' ? 'text-white' : ''
+                            }`}
+                            style={{
+                              backgroundColor: researchMode === 'max' ? theme.colors.primary : `${theme.colors.primary}20`,
+                              color: researchMode === 'max' ? 'white' : theme.colors.primary
+                            }}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            Max (40 papers)
+                          </motion.button>
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* Input area */}
+                    <motion.div 
+                      initial={{ y: 20, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      className="p-4 md:p-6 border-t"
+                      style={{ 
+                        backgroundColor: `${theme.colors.surface}80`,
+                        borderColor: theme.colors.border,
+                        backdropFilter: 'blur(8px)'
+                      }}
+                    >
+                      <div className="flex gap-3">
+                        <div className="flex-1 relative">
+                          <input
+                            ref={inputRef}
+                            value={newMessage}
+                            onChange={(e) => setNewMessage(e.target.value)}
+                            onKeyPress={handleKeyPress}
+                            placeholder={taggedPaper ? `Ask about "${(taggedPaper as any).title?.substring(0, 30)}..."` : "Ask a research question or search for papers..."}
+                            className="w-full p-3 pr-12 rounded-xl border focus:outline-none focus:ring-2 transition-all"
+                            style={{ 
+                              backgroundColor: theme.colors.background,
+                              borderColor: theme.colors.border,
+                              color: theme.colors.textPrimary
+                            }}
+                            onFocus={(e) => {
+                              e.currentTarget.style.borderColor = theme.colors.primary
+                              e.currentTarget.style.boxShadow = `0 0 0 2px ${theme.colors.primary}40`
+                            }}
+                            onBlur={(e) => {
+                              e.currentTarget.style.borderColor = theme.colors.border
+                              e.currentTarget.style.boxShadow = 'none'
+                            }}
+                            disabled={loading}
+                          />
+                          <HiSearch 
+                            className="absolute right-3 top-3 h-5 w-5" 
+                            style={{ color: theme.colors.textMuted }} 
+                          />
+                        </div>
+                        <motion.button
+                          onClick={handleResearchQuery}
+                          disabled={!newMessage.trim() || loading}
+                          className="px-4 py-3 rounded-xl font-medium text-white shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                          style={{ 
+                            background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                          }}
+                          whileHover={{ scale: newMessage.trim() && !loading ? 1.05 : 1 }}
+                          whileTap={{ scale: newMessage.trim() && !loading ? 0.95 : 1 }}
+                        >
+                          {loading ? (
+                            <div className="flex items-center">
+                              <motion.div
+                                animate={{ rotate: 360 }}
+                                transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                className="rounded-full h-4 w-4 border-b-2 border-white mr-2"
+                              />
+                              Searching...
+                            </div>
+                          ) : (
+                            <>
+                              <HiSparkles className="h-4 w-4" />
+                              {isMobile ? 'Search' : 'Search'}
+                            </>
+                          )}
+                        </motion.button>
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                )}
+
+                {activeView === 'papers' && (
+                  <motion.div
+                    key="papers"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 20 }}
+                    className="h-full overflow-y-auto p-4 md:p-6"
+                  >
+                    {/* Semantic search status indicator */}
+                    {loading && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        className="flex items-center justify-center p-8"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <motion.div
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                            className="w-6 h-6 border-2 border-t-transparent rounded-full"
+                            style={{ borderColor: theme.colors.primary }}
+                          />
+                          <span style={{ color: theme.colors.textPrimary }}>
+                            Searching research papers...
+                          </span>
+                        </div>
+                      </motion.div>
+                    )}
+
+                    {!loading && searchResults.length > 0 ? (
+                      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                        {searchResults.map((paper, i) => (
+                          <motion.div
+                            key={`paper-${(paper as any).paper_id || paper.doi || paper.url || paper.title || i}`}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.05 }}
+                            className="rounded-xl p-5 border cursor-pointer group transition-all hover:shadow-lg"
+                            style={{ 
+                              backgroundColor: theme.colors.surface,
+                              borderColor: theme.colors.border
+                            }}
+                            onClick={() => setSelectedPaper(paper)}
+                            whileHover={{ 
+                              scale: 1.02,
+                              boxShadow: `0 8px 32px ${theme.colors.primary}20`
+                            }}
+                          >
+                            <div 
+                              className="font-medium text-sm mb-3 line-clamp-2 group-hover:text-opacity-80 transition-colors"
+                              style={{ color: theme.colors.textPrimary }}
+                            >
+                              {paper.title}
+                            </div>
+                            <div 
+                              className="text-xs mb-2"
+                              style={{ color: theme.colors.textSecondary }}
+                            >
+                              {Array.isArray(paper.authors) ? paper.authors.join(', ') : paper.authors} · {paper.source}
+                              {paper.isOpenAccess && (
+                                <span className="ml-2 px-2 py-1 bg-green-600/20 text-green-400 rounded text-xs">
+                                  🟢 Open Access
+                                </span>
+                              )}
+                              {paper.oaHostType && (
+                                <span className="ml-1 px-2 py-1 bg-blue-600/20 text-blue-400 rounded text-xs">
+                                  📚 {paper.oaHostType}
+                                </span>
+                              )}
+                            </div>
+                            <div 
+                              className="text-xs mb-4 line-clamp-3"
+                              style={{ color: theme.colors.textMuted }}
+                            >
+                              {paper.abstract}
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <div className="flex gap-2 text-xs">
+                                {paper.citationCount && (
+                                  <span 
+                                    className="px-2 py-1 rounded-full"
+                                    style={{ 
+                                      backgroundColor: `${theme.colors.info}20`,
+                                      color: theme.colors.info
+                                    }}
+                                  >
+                                    📊 {paper.citationCount}
+                                  </span>
+                                )}
+                                {paper.relevanceScore && (
+                                  <span 
+                                    className="px-2 py-1 rounded-full"
+                                    style={{ 
+                                      backgroundColor: `${theme.colors.success}20`,
+                                      color: theme.colors.success
+                                    }}
+                                  >
+                                    🎯 {(paper.relevanceScore * 100).toFixed(0)}%
+                                  </span>
+                                )}
+                              </div>
+                              <div className="opacity-0 group-hover:opacity-100 flex gap-2">
+                                <motion.button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    const url = paper.pdfUrl || paper.url || (paper.doi ? `https://doi.org/${paper.doi}` : null)
+                                    if (url) {
+                                      window.open(url, '_blank')
+                                      toast.success('Opening paper...')
+                                    } else {
+                                      toast.error('No link available for this paper')
+                                    }
+                                  }}
+                                  className="px-3 py-1 text-sm rounded-lg font-medium text-white transition-all"
+                                  style={{ 
+                                    background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                                  }}
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.95 }}
+                                  title="Open/Download Paper"
+                                >
+                                  📄 Open
+                                </motion.button>
+                                <motion.button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handlePaperTag(paper)
+                                  }}
+                                  className="px-3 py-1 text-sm rounded-lg font-medium text-white transition-all"
+                                  style={{ 
+                                    background: `linear-gradient(135deg, ${theme.colors.accent}, ${theme.colors.success})` 
+                                  }}
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.95 }}
+                                  title="Ask questions about this paper"
+                                >
+                                  🤔 Ask
+                                </motion.button>
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-center">
+                        <motion.div
+                          animate={{ 
+                            y: [0, -10, 0],
+                            rotate: [0, 5, -5, 0]
+                          }}
+                          transition={{ duration: 3, repeat: Infinity }}
+                          className="text-6xl mb-4"
+                        >
+                          🔍
+                        </motion.div>
+                        <h3 
+                          className="text-xl font-semibold mb-2"
+                          style={{ color: theme.colors.textPrimary }}
+                        >
+                          No papers found yet
+                        </h3>
+                        <p 
+                          className="mb-4"
+                          style={{ color: theme.colors.textSecondary }}
+                        >
+                          {searchResults.length === 0 && messages.length > 0 
+                            ? "No relevant papers found for your query. Try different keywords or a broader search."
+                            : "Start a research query to discover relevant papers"
+                          }
+                        </p>
+                        <motion.button
+                          onClick={() => setActiveView('chat')}
+                          className="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium text-white"
+                          style={{ 
+                            background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                          }}
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                        >
+                          <HiArrowRight className="h-4 w-4" />
+                          Start Research
+                        </motion.button>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+
+                {activeView === 'analysis' && (
+                  <motion.div
+                    key="analysis"
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 20 }}
+                    className="h-full overflow-y-auto p-4 md:p-6"
+                  >
+                    {gapAnalysis || hypotheses ? (
+                      <div className="space-y-6">
+                        {gapAnalysis && <ResearchGapVisualization gapAnalysis={gapAnalysis} />}
+                        {hypotheses && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="rounded-xl p-6 border"
+                            style={{ 
+                              backgroundColor: theme.colors.surface,
+                              borderColor: theme.colors.border
+                            }}
+                          >
+                            <div className="flex items-center gap-3 mb-6">
+                              <HiBeaker className="h-6 w-6" style={{ color: theme.colors.accent }} />
+                              <h3 className="text-xl font-semibold" style={{ color: theme.colors.textPrimary }}>
+                                🧪 Novel Research Hypotheses
+                              </h3>
+                              <span 
+                                className="px-3 py-1 rounded-full text-sm"
+                                style={{
+                                  backgroundColor: `${theme.colors.success}20`,
+                                  color: theme.colors.success
+                                }}
+                              >
+                                {hypotheses.hypotheses.length} generated
+                              </span>
+                            </div>
+                            
+                            <div className="grid gap-4">
+                              {hypotheses.hypotheses.slice(0, 6).map((hypothesis: any, i: number) => (
+                                <motion.div
+                                  key={`hypothesis-${i}-${hypothesis.title || hypothesis.question || i}`}
+                                  initial={{ opacity: 0, y: 10 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  transition={{ delay: i * 0.1 }}
+                                  className="p-4 rounded-lg border hover:shadow-sm transition-all"
+                                  style={{ 
+                                    backgroundColor: theme.colors.background,
+                                    borderColor: theme.colors.border
+                                  }}
+                                >
+                                  <div className="flex items-start justify-between mb-3">
+                                    <div className="flex items-center gap-2">
+                                      <span 
+                                        className="px-2 py-1 rounded-full text-xs font-medium"
+                                        style={{
+                                          backgroundColor: `${theme.colors.primary}20`,
+                                          color: theme.colors.primary
+                                        }}
+                                      >
+                                        {hypothesis.type?.replace('-', ' ') || 'hypothesis'}
+                                      </span>
+                                      {hypothesis.confidence && (
+                                        <span 
+                                          className="px-2 py-1 rounded-full text-xs"
+                                          style={{
+                                            backgroundColor: hypothesis.confidence > 0.7 ? `${theme.colors.success}20` : `${theme.colors.warning}20`,
+                                            color: hypothesis.confidence > 0.7 ? theme.colors.success : theme.colors.warning
+                                          }}
+                                        >
+                                          {Math.round(hypothesis.confidence * 100)}% confidence
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  
+                                  <h4 className="font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
+                                    {hypothesis.hypothesis}
+                                  </h4>
+                                  
+                                  {hypothesis.rationale && (
+                                    <p className="text-sm mb-2" style={{ color: theme.colors.textSecondary }}>
+                                      <strong>Rationale:</strong> {hypothesis.rationale}
+                                    </p>
+                                  )}
+                                  
+                                  {hypothesis.testMethod && (
+                                    <p className="text-sm mb-2" style={{ color: theme.colors.textSecondary }}>
+                                      <strong>Test Method:</strong> {hypothesis.testMethod}
+                                    </p>
+                                  )}
+                                  
+                                  {hypothesis.significance && (
+                                    <p className="text-sm" style={{ color: theme.colors.textMuted }}>
+                                      <strong>Significance:</strong> {hypothesis.significance}
+                                    </p>
+                                  )}
+                                </motion.div>
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
+                        
+                        {/* Presentation Generation Section */}
+                        <motion.div
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="rounded-xl p-6 border"
+                          style={{ 
+                            backgroundColor: theme.colors.surface,
+                            borderColor: theme.colors.border
+                          }}
+                        >
+                          <div className="flex items-center gap-3 mb-6">
+                            <HiDocumentText className="h-6 w-6" style={{ color: theme.colors.accent }} />
+                            <h3 className="text-xl font-semibold" style={{ color: theme.colors.textPrimary }}>
+                              🎯 Generate PowerPoint Presentations
+                            </h3>
+                          </div>
+                          
+                          <div className="grid gap-4">
+                            <div className="p-4 rounded-lg border" style={{ borderColor: theme.colors.border }}>
+                              <h4 className="font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
+                                Upload Research Paper
+                              </h4>
+                              <p className="text-sm mb-4" style={{ color: theme.colors.textSecondary }}>
+                                Upload a PDF research paper to automatically generate a comprehensive PowerPoint presentation with 8 structured slides.
+                              </p>
+                              
+                              <div className="flex gap-3">
+                                <motion.button
+                                  onClick={() => document.getElementById('pdf-upload')?.click()}
+                                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white"
+                                  style={{ 
+                                    background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                                  }}
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.95 }}
+                                >
+                                  📄 Upload PDF
+                                </motion.button>
+                                
+                                <input
+                                  id="pdf-upload"
+                                  type="file"
+                                  accept=".pdf"
+                                  className="hidden"
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0]
+                                    if (file) {
+                                      handlePDFUpload(file)
+                                    }
+                                  }}
+                                />
+                                
+                                <span className="text-xs text-slate-400 self-center">
+                                  Supports PDF files up to 10MB
+                                </span>
+                              </div>
+                            </div>
+                            
+                            {sessionContext.length > 0 && (
+                              <div className="p-4 rounded-lg border" style={{ borderColor: theme.colors.border }}>
+                                <h4 className="font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
+                                  Generate from Session Papers
+                                </h4>
+                                <p className="text-sm mb-4" style={{ color: theme.colors.textSecondary }}>
+                                  Create presentations from papers already in your research session.
+                                </p>
+                                
+                                <div className="grid gap-2">
+                                  {sessionContext.slice(0, 3).map((paper, index) => (
+                                    <motion.button
+                                      key={`context-paper-${paper.paper_id || paper.id || index}`}
+                                      onClick={() => handleGeneratePresentationFromContext(paper)}
+                                      className="flex items-center justify-between p-3 rounded-lg border hover:bg-opacity-50 transition-all text-left"
+                                      style={{ 
+                                        backgroundColor: theme.colors.background,
+                                        borderColor: theme.colors.border
+                                      }}
+                                      whileHover={{ scale: 1.02 }}
+                                      whileTap={{ scale: 0.98 }}
+                                    >
+                                      <div className="flex-1">
+                                        <div className="font-medium text-sm" style={{ color: theme.colors.textPrimary }}>
+                                          {paper.title.substring(0, 60)}...
+                                        </div>
+                                        <div className="text-xs" style={{ color: theme.colors.textSecondary }}>
+                                          {paper.authors?.substring(0, 40)}...
+                                        </div>
+                                      </div>
+                                      <motion.button
+                                        className="px-3 py-1 text-sm rounded-lg font-medium text-white"
+                                        style={{ 
+                                          background: `linear-gradient(135deg, #8B5CF6, #A855F7)` 
+                                        }}
+                                        whileHover={{ scale: 1.05 }}
+                                        whileTap={{ scale: 0.95 }}
+                                      >
+                                        🎯 Generate
+                                      </motion.button>
+                                    </motion.button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </motion.div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-center">
+                        <motion.div
+                          animate={{ 
+                            scale: [1, 1.1, 1],
+                            rotate: [0, 180, 360]
+                          }}
+                          transition={{ duration: 4, repeat: Infinity }}
+                          className="text-6xl mb-4"
+                        >
+                          📊
+                        </motion.div>
+                        <h3 
+                          className="text-xl font-semibold mb-2"
+                          style={{ color: theme.colors.textPrimary }}
+                        >
+                          No analysis available
+                        </h3>
+                        <p 
+                          className="mb-4"
+                          style={{ color: theme.colors.textSecondary }}
+                        >
+                          Generate research gap analysis from your papers
+                        </p>
+                        <div className="flex gap-3">
+                          <motion.button
+                            onClick={handleGenerateVisualization}
+                            disabled={sessionContext.length === 0}
+                            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                            style={{ 
+                              background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                            }}
+                            whileHover={{ scale: sessionContext.length > 0 ? 1.05 : 1 }}
+                            whileTap={{ scale: sessionContext.length > 0 ? 0.95 : 1 }}
+                          >
+                            <HiChartBar className="h-4 w-4" />
+                            Gap Analysis
+                          </motion.button>
+                          
+                          <motion.button
+                            onClick={handleGenerateHypotheses}
+                            disabled={sessionContext.length === 0}
+                            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                            style={{ 
+                              background: `linear-gradient(135deg, ${theme.colors.accent}, ${theme.colors.success})` 
+                            }}
+                            whileHover={{ scale: sessionContext.length > 0 ? 1.05 : 1 }}
+                            whileTap={{ scale: sessionContext.length > 0 ? 0.95 : 1 }}
+                          >
+                            <HiBeaker className="h-4 w-4" />
+                            🧪 Generate Hypotheses
+                          </motion.button>
+                        </div>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </>
+        ) : (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex-1 flex items-center justify-center p-4"
+          >
+            <div className="text-center space-y-6 max-w-md">
+              <motion.div
+                animate={{ 
+                  y: [0, -20, 0],
+                  rotate: [0, 10, -10, 0]
+                }}
+                transition={{ duration: 4, repeat: Infinity }}
+                className="text-8xl mb-4"
+              >
+                🚀
+              </motion.div>
+              <h3 
+                className="text-2xl font-bold"
+                style={{ color: theme.colors.textPrimary }}
+              >
+                Start Your Research Journey
+              </h3>
+              <p 
+                className="text-lg"
+                style={{ color: theme.colors.textSecondary }}
+              >
+                Create a new session to begin exploring research papers with AI assistance
+              </p>
+              <motion.button 
+                onClick={handleCreateSession} 
+                className="inline-flex items-center gap-2 text-lg px-8 py-3 rounded-lg font-medium text-white shadow-lg"
+                style={{ 
+                  background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
+                }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <HiSparkles className="h-5 w-5" />
+                Create Research Session
+              </motion.button>
+            </div>
+          </motion.div>
+        )}
+      </div>
+
+      {/* Paper detail modal */}
+      <AnimatePresence>
+        {selectedPaper && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur flex items-center justify-center p-4 z-50"
+            onClick={() => setSelectedPaper(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="rounded-xl max-w-4xl w-full max-h-[80vh] overflow-auto p-6 border"
+              style={{ 
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.border
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 
+                  className="text-lg font-semibold"
+                  style={{ color: theme.colors.textPrimary }}
+                >
+                  Paper Details
+                </h3>
+                <motion.button
+                  onClick={() => setSelectedPaper(null)}
+                  className="px-3 py-1 rounded-lg"
+                  style={{ backgroundColor: `${theme.colors.textSecondary}20` }}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  <HiX className="h-4 w-4" style={{ color: theme.colors.textSecondary }} />
+                </motion.button>
+              </div>
+              <div className="space-y-4">
+                <div>
+                  <h4 
+                    className="font-medium mb-2"
+                    style={{ color: theme.colors.textPrimary }}
+                  >
+                    {selectedPaper.title}
+                  </h4>
+                  <p 
+                    className="text-sm"
+                    style={{ color: theme.colors.textSecondary }}
+                  >
+                    {Array.isArray(selectedPaper.authors) ? selectedPaper.authors.join(', ') : selectedPaper.authors}
+                  </p>
+                </div>
+                <div>
+                  <h5 
+                    className="font-medium text-sm mb-1"
+                    style={{ color: theme.colors.textPrimary }}
+                  >
+                    Abstract
+                  </h5>
+                  <p 
+                    className="text-sm"
+                    style={{ color: theme.colors.textSecondary }}
+                  >
+                    {selectedPaper.abstract}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  {selectedPaper.url && (
+                    <motion.a
+                      href={selectedPaper.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium"
+                      style={{ 
+                        backgroundColor: `${theme.colors.info}20`,
+                        color: theme.colors.info
+                      }}
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      <HiBookOpen className="h-4 w-4" />
+                      View Paper
+                    </motion.a>
+                  )}
+                  {selectedPaper.pdfUrl && (
+                    <motion.a
+                      href={selectedPaper.pdfUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium"
+                      style={{ 
+                        backgroundColor: `${theme.colors.error}20`,
+                        color: theme.colors.error
+                      }}
+                      whileHover={{ scale: 1.05 }}
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      <HiDocumentText className="h-4 w-4" />
+                      PDF
+                    </motion.a>
+                  )}
+                  <motion.button
+                    onClick={() => {
+                      handlePaperTag(selectedPaper)
+                      setSelectedPaper(null)
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm rounded-lg font-medium text-white"
+                    style={{ 
+                      background: `linear-gradient(135deg, ${theme.colors.accent}, ${theme.colors.success})` 
+                    }}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <HiChatAlt2 className="h-4 w-4" />
+                    Ask Question
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Click outside to close dropdown */}
+      {dropdownOpen && (
+        <div
+          className="fixed inset-0 z-40"
+          onClick={() => setDropdownOpen(null)}
+        />
+      )}
+    </div>
+  )
+}

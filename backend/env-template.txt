@@ -1,0 +1,39 @@
+# Copy this to .env and fill in your actual keys
+
+# Server Configuration
+PORT=3000
+CORS_ORIGIN=*
+
+# API Keys
+GEMINI_API_KEY=your-gemini-api-key-here
+
+# Authentication & Database
+CLERK_PUBLISHABLE_KEY=your-clerk-publishable-key
+CLERK_SECRET_KEY=your-clerk-secret-key
+SUPABASE_URL=your-supabase-project-url
+SUPABASE_ANON_KEY=your-supabase-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+
+# Redis Configuration
+REDIS_URL=redis://localhost:6379
+CACHE_TTL_SECONDS=3600
+
+# Optional Services
+GROBID_URL=https://cloud.science-miner.com/grobid
+UNPAYWALL_EMAIL=your-email@example.com
+
+# Research Worker & Backpressure
+ENABLE_RESEARCH_WORKER=true
+RESEARCH_WORKER_CONCURRENCY=1
+RESEARCH_MAX_RESULTS=8
+
+# Sources
+SCHOLAR_ENABLED=true
+DEFAULT_SOURCES=scholar,arxiv,pubmed,openalex
+
+# Hybrid Fusion Weights
+HYBRID_W_BM25=0.5
+HYBRID_W_EMBED=0.5
+
+# Debug Configuration
+DEBUG=researchai:*

@@ -1,0 +1,13 @@
+paper_title,authors,published_date,summary,link
+"LitLLM: A Toolkit for Scientific Literature Review","Agarwal et al.","2024-02-02","Modular LLM toolkit for RAG, LLM reranking, and plan-based generation; reduces hallucination via retrieval grounding","https://arxiv.org/html/2402.01788v1"
+"LitLLMs: LLMs for Literature Review: Are we there yet?","Agarwal et al.","2024-12-15 (v1); 2025-03-21 (v2)","Two-step retrieval+planning with zero-shot LLM eval; improved recall with LLM-based keywording and reranking","https://arxiv.org/abs/2412.15249"
+"LLAssist","Haryanto","2024-07-19 (v1); 2024-12-20 (v3)","Open-source automation for screening and summarization with LLMs; reduces initial review effort","https://arxiv.org/abs/2407.13993"
+"HYRR: Hybrid Infused Reranking","Lu et al.","2022-12-20","Trains cross-encoder rerankers using hybrid BM25+dense candidates; robust across MS MARCO/BEIR","https://arxiv.org/pdf/2212.10528.pdf"
+"Injecting BM25 score as text","Askari et al.","2023-01-23","Adding BM25 scores as tokens to cross-encoder inputs improves reranking effectiveness","https://arxiv.org/abs/2301.09728"
+"InsertRank","Seetharaman et al.","2025-06-17","LLM reranker that reasons over BM25 scores; boosts listwise reranking on reasoning-heavy benchmarks","https://arxiv.org/abs/2506.14086"
+"Hybrid retrieval & multi-stage ranking (TREC DL 2022)","Xu et al.","2023-08-23","Strong hybrid retriever with multi-stage reranking in production-like conditions","https://arxiv.org/abs/2308.12039"
+"BM\uD835\uDD58: Entropy-weighted, semantic-enhanced lexical search","Li et al.","2024-08-12","Entropy-weighted similarity and semantic augmentation; strong lexical baseline","https://arxiv.org/html/2408.06643v2"
+"Structured references from PDF","Cioffi, Peroni","2022-05-29","Benchmarks GROBID/CERMINE/etc.; AnyStyle often best; performance varies by domain","https://arxiv.org/pdf/2205.14677.pdf"
+"Synthetic vs real reference strings for citation parsing","Grennan, Beel","2020","Synthetic data viable; retraining boosts F1; broader evaluations recommended","https://www.aclweb.org/anthology/2020.wosp-1.4.pdf"
+"Reference-based post-OCR with LLM for diacritics","Do et al.","2024-10-17 (v1); 2025-02-27 (v3)","LLM post-processing with reference ebooks improves historical OCR for diacritic languages","https://arxiv.org/abs/2410.13305"
+"Mining Asymmetric Intertextuality","Lau, McManus","2024-10-19","Split-normalize-merge + LLM verification to detect one-way intertextual links","https://arxiv.org/abs/2410.15145"

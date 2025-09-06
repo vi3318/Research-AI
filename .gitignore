@@ -1,0 +1,104 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.production
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE_BIN/
+*.cab
+*.msi
+*.msm
+*.msp
+*.lnk
+
+# Logs
+logs/
+*.log
+
+# Build outputs
+dist/
+build/
+out/
+
+# Temporary folders
+tmp/
+temp/
+
+# Coverage reports
+coverage/
+*.lcov
+
+# API Keys and sensitive data
+config/secrets.js
+config/keys.js
+secrets/
+*.pem
+*.key
+*.crt
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Backup files
+*.backup
+*.bak
+
+# Archive files
+*.zip
+*.tar.gz
+*.rar
+
+# Documentation that might contain sensitive info
+private-docs/
+internal-docs/
+
+# Project-specific ignores
+research-data/
+test-data/
+sample-papers/
+
+# Generated presentations and reports
+presentations/
+slides/
+*.pptx
+*.ppt
+reports/
+
+# Redis and cache files
+dump.rdb
+.cache/
+
+# PM2 and process management
+.pm2/
+pids/
+*.pid
+*.seed
+*.pid.lock
