@@ -1,6 +1,6 @@
 const express = require('express');
 const chatController = require('../controllers/chatController');
-const { requireAuth, syncUser } = require('../middleware/auth');
+const { requireAuth, syncUser, optionalAuth } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -95,7 +95,7 @@ router.post('/sessions', requireAuth, syncUser, chatController.createSession);
  *               items:
  *                 $ref: '#/components/schemas/ChatSession'
  */
-router.get('/sessions', requireAuth, syncUser, chatController.getSessions);
+router.get('/sessions', optionalAuth, syncUser, chatController.getSessions);
 
 /**
  * @swagger
@@ -289,5 +289,54 @@ router.put('/sessions/:sessionId', requireAuth, syncUser, chatController.updateS
  *         description: Session deleted
  */
 router.delete('/sessions/:sessionId', requireAuth, syncUser, chatController.deleteSession);
+
+/**
+ * @swagger
+ * /api/chat/research-assistant:
+ *   post:
+ *     summary: Chat with Cerebras-powered research assistant
+ *     description: Get research guidance, trends analysis, and concept explanations from AI research assistant
+ *     tags: [Chat]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - message
+ *             properties:
+ *               message:
+ *                 type: string
+ *                 description: Research question or topic to discuss
+ *               sessionId:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Optional session ID for conversation context
+ *               researchArea:
+ *                 type: string
+ *                 description: Specific research domain for focused assistance
+ *     responses:
+ *       200:
+ *         description: Research assistant response
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 response:
+ *                   type: string
+ *                 suggestions:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *                 trends:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ */
+router.post('/research-assistant', requireAuth, syncUser, chatController.researchAssistant);
 
 module.exports = router;

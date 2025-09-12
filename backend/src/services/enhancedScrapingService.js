@@ -328,14 +328,25 @@ class EnhancedScrapingService {
     const seenKeys = new Set();
     const deduplicated = [];
 
-    // Sort by relevance score first (if available)
+    // Calculate relevance scores for all papers first
+    papers.forEach(paper => {
+      paper.relevanceScore = this.calculateRelevanceScore(paper, topic);
+      paper.qualityScore = this.calculateQualityScore(paper);
+    });
+
+    // Sort by relevance score first with higher threshold for quality
     papers.sort((a, b) => {
-      const scoreA = this.calculateRelevanceScore(a, topic);
-      const scoreB = this.calculateRelevanceScore(b, topic);
+      const scoreA = (a.relevanceScore * 0.7) + (a.qualityScore * 0.3);
+      const scoreB = (b.relevanceScore * 0.7) + (b.qualityScore * 0.3);
       return scoreB - scoreA;
     });
 
     for (const paper of papers) {
+      // Skip papers with very low relevance (less than 0.3)
+      if (paper.relevanceScore < 0.3) {
+        continue;
+      }
+
       // Create deduplication key
       const doiKey = paper.doi ? `doi:${paper.doi.toLowerCase()}` : null;
       const titleKey = paper.title ? `title:${this.normalizeTitle(paper.title)}` : null;
@@ -349,10 +360,8 @@ class EnhancedScrapingService {
 
       seenKeys.add(key);
       
-      // Add computed fields
-      paper.relevanceScore = this.calculateRelevanceScore(paper, topic);
-      paper.qualityScore = this.calculateQualityScore(paper);
-      paper.sources = [paper.source]; // Track which source found this paper
+      // Track sources
+      paper.sources = [paper.source];
       
       deduplicated.push(paper);
       
@@ -363,14 +372,7 @@ class EnhancedScrapingService {
       }
     }
 
-    // Final ranking by combined score
-    deduplicated.sort((a, b) => {
-      const scoreA = (a.relevanceScore * 0.6) + (a.qualityScore * 0.4);
-      const scoreB = (b.relevanceScore * 0.6) + (b.qualityScore * 0.4);
-      return scoreB - scoreA;
-    });
-
-    debug('After deduplication and limiting: %d papers (max: %d)', deduplicated.length, maxResults);
+    debug('After deduplication and filtering: %d papers (max: %d, min relevance: 0.3)', deduplicated.length, maxResults);
     return deduplicated;
   }
 
@@ -380,19 +382,64 @@ class EnhancedScrapingService {
     const topicWords = topic.toLowerCase().split(/\s+/);
     
     let score = 0;
+    let exactMatches = 0;
+    let titleMatches = 0;
+    let abstractMatches = 0;
+
+    // Score individual word matches
     topicWords.forEach(word => {
-      if (word.length > 2 && text.includes(word)) {
-        score += 1;
+      if (word.length > 2) {
+        if (text.includes(word)) {
+          score += 1;
+          exactMatches += 1;
+        }
+        
+        // Bonus for title matches (more important)
+        if (paper.title && paper.title.toLowerCase().includes(word)) {
+          titleMatches += 1;
+          score += 2;
+        }
+        
+        // Score for abstract matches
+        if (paper.abstract && paper.abstract.toLowerCase().includes(word)) {
+          abstractMatches += 1;
+          score += 0.5;
+        }
       }
     });
 
-    // Bonus for exact phrase match
+    // Strong bonus for exact phrase match
     if (text.includes(topic.toLowerCase())) {
-      score += 3;
+      score += 5;
     }
 
-    // Normalize by topic word count
-    return score / topicWords.length;
+    // Bonus for high word coverage
+    const coverage = exactMatches / topicWords.length;
+    if (coverage > 0.7) {
+      score += 3;
+    } else if (coverage > 0.5) {
+      score += 1.5;
+    }
+
+    // Bonus for multiple keywords in title
+    if (titleMatches > 1) {
+      score += titleMatches * 1.5;
+    }
+
+    // For "reinforcement learning" specifically
+    if (topic.toLowerCase().includes('reinforcement learning') || 
+        topic.toLowerCase().includes('reinforcement') && topic.toLowerCase().includes('learning')) {
+      if (text.includes('reinforcement learning') || 
+          text.includes('reinforcement') && text.includes('learning') ||
+          text.includes('rl') || text.includes('dqn') || text.includes('policy gradient') ||
+          text.includes('q-learning') || text.includes('actor-critic')) {
+        score += 8;
+      }
+    }
+
+    // Normalize and cap score
+    const normalizedScore = Math.min(score / Math.max(topicWords.length, 1), 10);
+    return normalizedScore;
   }
 
   // Calculate quality score based on available metadata

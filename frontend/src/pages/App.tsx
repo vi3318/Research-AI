@@ -1,18 +1,27 @@
 import { Route, Routes, NavLink } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { useUser, SignInButton, UserButton } from '@clerk/clerk-react'
 import { Toaster } from 'react-hot-toast'
 import { HiSun, HiMoon } from 'react-icons/hi'
 import { useTheme } from '../contexts/ThemeContext'
+import { AuthProvider } from '../contexts/AuthContext'
+import { PaperStorageProvider } from '../contexts/PaperStorageContext'
+import { ChatProvider } from '../contexts/ChatContext'
+import UserMenu from '../components/UserMenu'
+import ProtectedRoute from '../components/ProtectedRoute'
 import ResearchJobs from './ResearchJobs'
 import Semantic from './Semantic'
 import Literature from './Literature'
 import Chat from './Chat'
+import ChatNew from './ChatNew'
+import SimpleChat from './SimpleChat'
 import EnhancedChat from './EnhancedChat'
 import Presentation from './Presentation'
+import WorkspacePage from './WorkspacePage'
+import DocumentEditor from './DocumentEditor'
+import WorkspaceList from './WorkspaceList'
+import QAHelp from './QAHelp'
 
 export default function App() {
-  const { user, isLoaded } = useUser()
   const { theme, isDark, toggleTheme } = useTheme()
   
   const tabs = [
@@ -20,28 +29,34 @@ export default function App() {
     { to: '/research', label: 'Research Jobs' },
     { to: '/semantic', label: 'Semantic Search' },
     { to: '/presentation', label: 'Presentation' },
+    { to: '/workspace', label: 'Workspace' },
+    { to: '/chat', label: 'Chat' },
   ]
+  
   return (
-    <div className="min-h-screen" style={{ backgroundColor: theme.colors.background }}>
-      <header className="sticky top-0 z-40 backdrop-blur border-b" style={{ 
-        backgroundColor: `${theme.colors.surface}70`, 
-        borderColor: theme.colors.border 
-      }}>
-        <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
-          <motion.div initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-brand-400 to-brand-700 animate-pulse" />
-            <div className="text-xl font-semibold" style={{ color: theme.colors.textPrimary }}>ResearchAI</div>
-          </motion.div>
-          <nav className="flex items-center gap-2">
-            {tabs.map(t => (
-              <NavLink 
-                key={t.to} 
-                to={t.to} 
-                end 
-                className={({ isActive }) => (
-                  `px-3 py-2 rounded-md transition-colors ${isActive ? '' : ''}`
-                )}
-                style={({ isActive }) => ({
+    <AuthProvider>
+      <PaperStorageProvider>
+        <ChatProvider>
+          <div className="min-h-screen" style={{ backgroundColor: theme.colors.background }}>
+          <header className="sticky top-0 z-40 backdrop-blur border-b" style={{ 
+            backgroundColor: `${theme.colors.surface}70`, 
+            borderColor: theme.colors.border 
+          }}>
+            <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
+              <motion.div initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} className="flex items-center gap-3">
+                <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-brand-400 to-brand-700 animate-pulse" />
+                <div className="text-xl font-semibold" style={{ color: theme.colors.textPrimary }}>ResearchAI</div>
+              </motion.div>
+              <nav className="flex items-center gap-2">
+                {tabs.map(t => (
+                  <NavLink 
+                    key={t.to} 
+                    to={t.to} 
+                    end 
+                    className={({ isActive }) => (
+                    `px-3 py-2 rounded-md transition-colors ${isActive ? '' : ''}`
+                  )}
+                  style={({ isActive }) => ({
                   backgroundColor: isActive ? `${theme.colors.primary}20` : 'transparent',
                   color: isActive ? theme.colors.primary : theme.colors.textSecondary
                 })}
@@ -49,14 +64,6 @@ export default function App() {
                 {t.label}
               </NavLink>
             ))}
-            <a 
-              className="px-3 py-2 rounded-md transition-colors" 
-              href="/api/docs" 
-              target="_blank"
-              style={{ color: theme.colors.textSecondary }}
-            >
-              Docs
-            </a>
             <div className="ml-4 flex items-center gap-3">
               <motion.button
                 onClick={toggleTheme}
@@ -81,23 +88,23 @@ export default function App() {
                   <HiMoon className="h-5 w-5" style={{ color: theme.colors.textSecondary }} />
                 )}
               </motion.button>
-              {isLoaded && user ? (
-                <UserButton afterSignOutUrl="/" />
-              ) : isLoaded ? (
-                <SignInButton mode="modal">
-                  <button className="btn-sm">Sign In</button>
-                </SignInButton>
-              ) : null}
+              <UserMenu />
             </div>
           </nav>
         </div>
       </header>
       <main className={`${window.location.pathname === '/' ? '' : 'mx-auto max-w-7xl px-6 py-8'}`}>
         <Routes>
-          <Route path="/" element={<EnhancedChat />} />
-          <Route path="/research" element={<ResearchJobs />} />
-          <Route path="/semantic" element={<Semantic />} />
-          <Route path="/presentation" element={<Presentation />} />
+          <Route path="/" element={<ProtectedRoute><EnhancedChat /></ProtectedRoute>} />
+          <Route path="/research" element={<ProtectedRoute><ResearchJobs /></ProtectedRoute>} />
+          <Route path="/semantic" element={<ProtectedRoute><Semantic /></ProtectedRoute>} />
+          <Route path="/presentation" element={<ProtectedRoute><Presentation /></ProtectedRoute>} />
+          <Route path="/workspace" element={<ProtectedRoute><WorkspaceList /></ProtectedRoute>} />
+          <Route path="/workspace/:workspaceId" element={<ProtectedRoute><WorkspacePage /></ProtectedRoute>} />
+          <Route path="/workspace/:workspaceId/editor/:documentId?" element={<ProtectedRoute><DocumentEditor /></ProtectedRoute>} />
+          <Route path="/chat" element={<SimpleChat />} />
+          <Route path="/enhanced" element={<ProtectedRoute><EnhancedChat /></ProtectedRoute>} />
+          <Route path="/docs" element={<QAHelp />} />
         </Routes>
       </main>
       <Toaster 
@@ -112,7 +119,10 @@ export default function App() {
           },
         }}
       />
-    </div>
+        </div>
+        </ChatProvider>
+      </PaperStorageProvider>
+    </AuthProvider>
   )
 }
 

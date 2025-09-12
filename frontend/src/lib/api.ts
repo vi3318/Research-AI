@@ -1,15 +1,46 @@
 import axios from 'axios'
 
-const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+const baseURL = (import.meta as any).env.VITE_API_URL || 'http://localhost:3000'
 
 export const api = axios.create({ baseURL })
+
+// Add request interceptor for debugging
+api.interceptors.request.use((config) => {
+  console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`, {
+    headers: config.headers,
+    data: config.data
+  })
+  return config
+}, (error) => {
+  console.error('API Request Error:', error)
+  return Promise.reject(error)
+})
+
+// Add response interceptor for debugging
+api.interceptors.response.use((response) => {
+  console.log(`API Response: ${response.config.method?.toUpperCase()} ${response.config.url}`, {
+    status: response.status,
+    data: response.data
+  })
+  return response
+}, (error) => {
+  console.error('API Response Error:', {
+    url: error.config?.url,
+    status: error.response?.status,
+    data: error.response?.data,
+    message: error.message
+  })
+  return Promise.reject(error)
+})
 
 // Set auth token for requests
 export function setAuthToken(token: string | null) {
   if (token) {
     api.defaults.headers.common['Authorization'] = `Bearer ${token}`
+    console.log('Auth token set for API requests')
   } else {
     delete api.defaults.headers.common['Authorization']
+    console.log('Auth token removed from API requests')
   }
 }
 

@@ -4,8 +4,9 @@ import {
   HiUpload, HiDownload, HiDocumentText, HiSparkles, HiCog 
 } from 'react-icons/hi';
 import { useTheme } from '../contexts/ThemeContext';
-import { useAuth } from '@clerk/clerk-react';
+import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'react-hot-toast';
+import { apiClient } from '../lib/apiClient';
 
 interface AutoPptTheme {
   id: string;
@@ -28,7 +29,7 @@ interface GeneratedPresentation {
 
 export default function AutoPptGenerator() {
   const { theme } = useTheme();
-  const { getToken } = useAuth();
+  const { session } = useAuth();
   const [isUploading, setIsUploading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -45,17 +46,10 @@ export default function AutoPptGenerator() {
 
   const loadThemes = async () => {
     try {
-      const token = await getToken();
-      const response = await fetch('/api/auto-ppt/themes', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setAvailableThemes(data.themes || []);
-      }
+      // Use simple endpoint that doesn't require auth
+      const response = await fetch('/api/simple-auto-ppt/themes');
+      const data = await response.json();
+      setAvailableThemes(data.themes || []);
     } catch (error) {
       console.error('Failed to load themes:', error);
       // Set default themes if API fails
@@ -95,27 +89,24 @@ export default function AutoPptGenerator() {
     const loadingToast = toast.loading('🤖 Generating your presentation...');
 
     try {
-      const token = await getToken();
       const formData = new FormData();
       formData.append('pdf', uploadedFile);
       formData.append('theme', selectedTheme);
       if (customTitle) formData.append('title', customTitle);
       if (customAuthor) formData.append('author', customAuthor);
 
-      const response = await fetch('/api/auto-ppt/generate-from-pdf', {
+      // Use simple endpoint that doesn't require auth
+      const response = await fetch('/api/simple-auto-ppt/generate-from-pdf', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
+        body: formData,
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Generation failed');
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.json();
+
       setGeneratedPresentation({
         ...data.presentation,
         downloadSize: data.downloadSize,
@@ -141,24 +132,26 @@ export default function AutoPptGenerator() {
     }
 
     try {
-      const token = await getToken();
       const downloadId = generatedPresentation.downloadUrl.split('/').pop();
       
       if (!downloadId) {
         throw new Error('Invalid download URL');
       }
       
-      const response = await fetch(`/api/auto-ppt/download/${downloadId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+      // Use simple endpoint that doesn't require auth
+      const response = await fetch(`/api/simple-auto-ppt/download/${downloadId}`, {
+        method: 'GET',
+        headers: { 'Accept': 'application/octet-stream' }
       });
 
       if (!response.ok) {
-        throw new Error('Download failed');
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
+      // Get the response as blob
       const blob = await response.blob();
+
+      // Create download link
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -185,11 +178,11 @@ export default function AutoPptGenerator() {
       >
         <div className="flex items-center justify-center mb-4">
           <HiSparkles className="w-8 h-8 mr-3" style={{ color: theme.colors.primary }} />
-          <h1 className="text-3xl font-bold" style={{ color: theme.colors.text }}>
+          <h1 className="text-3xl font-bold" style={{ color: theme.colors.textPrimaryPrimary }}>
             Auto-PPT Generator
           </h1>
         </div>
-        <p className="text-lg" style={{ color: theme.colors.textSecondary }}>
+        <p className="text-lg" style={{ color: theme.colors.textPrimarySecondary }}>
           Transform your research papers into professional presentations with AI
         </p>
       </motion.div>
@@ -207,10 +200,10 @@ export default function AutoPptGenerator() {
       >
         <div className="text-center">
           <HiUpload className="w-16 h-16 mx-auto mb-4" style={{ color: theme.colors.primary }} />
-          <h3 className="text-xl font-semibold mb-2" style={{ color: theme.colors.text }}>
+          <h3 className="text-xl font-semibold mb-2" style={{ color: theme.colors.textPrimary }}>
             Upload Research Paper
           </h3>
-          <p className="mb-6" style={{ color: theme.colors.textSecondary }}>
+          <p className="mb-6" style={{ color: theme.colors.textPrimarySecondary }}>
             Upload a PDF of your research paper to generate a presentation
           </p>
           
@@ -239,10 +232,10 @@ export default function AutoPptGenerator() {
               className="mt-4 p-4 rounded-xl"
               style={{ backgroundColor: theme.colors.background }}
             >
-              <p className="font-medium" style={{ color: theme.colors.text }}>
+              <p className="font-medium" style={{ color: theme.colors.textPrimary }}>
                 📄 {uploadedFile.name}
               </p>
-              <p className="text-sm" style={{ color: theme.colors.textSecondary }}>
+              <p className="text-sm" style={{ color: theme.colors.textPrimarySecondary }}>
                 {(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB
               </p>
             </motion.div>
@@ -260,7 +253,7 @@ export default function AutoPptGenerator() {
       >
         <div className="flex items-center mb-6">
           <HiCog className="w-6 h-6 mr-3" style={{ color: theme.colors.primary }} />
-          <h3 className="text-xl font-semibold" style={{ color: theme.colors.text }}>
+          <h3 className="text-xl font-semibold" style={{ color: theme.colors.textPrimary }}>
             Presentation Settings
           </h3>
         </div>
@@ -268,7 +261,7 @@ export default function AutoPptGenerator() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Theme Selection */}
           <div>
-            <label className="block text-sm font-medium mb-3" style={{ color: theme.colors.text }}>
+            <label className="block text-sm font-medium mb-3" style={{ color: theme.colors.textPrimary }}>
               Theme
             </label>
             <div className="space-y-2">
@@ -294,10 +287,10 @@ export default function AutoPptGenerator() {
                     className="mr-3"
                   />
                   <div>
-                    <p className="font-medium" style={{ color: theme.colors.text }}>
+                    <p className="font-medium" style={{ color: theme.colors.textPrimary }}>
                       {themeOption.name}
                     </p>
-                    <p className="text-sm" style={{ color: theme.colors.textSecondary }}>
+                    <p className="text-sm" style={{ color: theme.colors.textPrimarySecondary }}>
                       {themeOption.description}
                     </p>
                   </div>
@@ -309,7 +302,7 @@ export default function AutoPptGenerator() {
           {/* Custom Fields */}
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-2" style={{ color: theme.colors.text }}>
+              <label className="block text-sm font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
                 Custom Title (Optional)
               </label>
               <input
@@ -321,14 +314,14 @@ export default function AutoPptGenerator() {
                 style={{ 
                   backgroundColor: theme.colors.background,
                   borderColor: theme.colors.border,
-                  color: theme.colors.text,
+                  color: theme.colors.textPrimary,
                   '--tw-ring-color': theme.colors.primary
                 } as any}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2" style={{ color: theme.colors.text }}>
+              <label className="block text-sm font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
                 Author Name (Optional)
               </label>
               <input
@@ -340,7 +333,7 @@ export default function AutoPptGenerator() {
                 style={{ 
                   backgroundColor: theme.colors.background,
                   borderColor: theme.colors.border,
-                  color: theme.colors.text,
+                  color: theme.colors.textPrimary,
                   '--tw-ring-color': theme.colors.primary
                 } as any}
               />
@@ -387,19 +380,19 @@ export default function AutoPptGenerator() {
           className="p-6 rounded-2xl"
           style={{ backgroundColor: theme.colors.surface }}
         >
-          <h3 className="text-xl font-semibold mb-4" style={{ color: theme.colors.text }}>
+          <h3 className="text-xl font-semibold mb-4" style={{ color: theme.colors.textPrimary }}>
             📊 Generated Presentation
           </h3>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
             <div>
-              <h4 className="font-medium mb-2" style={{ color: theme.colors.text }}>
+              <h4 className="font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
                 {generatedPresentation.title}
               </h4>
-              <p style={{ color: theme.colors.textSecondary }}>
+              <p style={{ color: theme.colors.textPrimarySecondary }}>
                 {generatedPresentation.totalSlides} slides • {selectedTheme} theme
               </p>
-              <p className="text-sm mt-1" style={{ color: theme.colors.textSecondary }}>
+              <p className="text-sm mt-1" style={{ color: theme.colors.textPrimarySecondary }}>
                 Size: {generatedPresentation.downloadSize ? 
                   (generatedPresentation.downloadSize / (1024 * 1024)).toFixed(2) : 'Unknown'} MB
               </p>
@@ -422,7 +415,7 @@ export default function AutoPptGenerator() {
 
           {/* Slide Preview */}
           <div>
-            <h5 className="font-medium mb-3" style={{ color: theme.colors.text }}>
+            <h5 className="font-medium mb-3" style={{ color: theme.colors.textPrimary }}>
               Slide Overview
             </h5>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -445,11 +438,11 @@ export default function AutoPptGenerator() {
                     >
                       {index + 1}
                     </span>
-                    <h6 className="font-medium text-sm" style={{ color: theme.colors.text }}>
+                    <h6 className="font-medium text-sm" style={{ color: theme.colors.textPrimary }}>
                       {slide.title}
                     </h6>
                   </div>
-                  <p className="text-xs" style={{ color: theme.colors.textSecondary }}>
+                  <p className="text-xs" style={{ color: theme.colors.textPrimarySecondary }}>
                     {slide.type} • {slide.content.length > 50 ? slide.content.substring(0, 50) + '...' : slide.content}
                   </p>
                 </div>

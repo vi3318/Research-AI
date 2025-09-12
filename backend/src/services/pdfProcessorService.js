@@ -189,7 +189,24 @@ const processPapers = async (papersByTopic) => {
                     const authors = r?.analytic?.author ? (Array.isArray(r.analytic.author) ? r.analytic.author : [r.analytic.author]) : [];
                     const authStr = authors.map(a => [a?.persName?.forename?._, a?.persName?.surname?._].filter(Boolean).join(" ")).filter(Boolean).join(", ");
                     const year = r?.monogr?.imprint?.date?.["@when"] || r?.monogr?.imprint?.date?.when || r?.monogr?.imprint?.date || undefined;
-                    if (title) references.push({ title: typeof title === "string" ? title : JSON.stringify(title), doi, authors: authStr, year });
+                    // Extract title safely - handle various formats
+                    let titleValue = null;
+                    if (typeof title === "string") {
+                      titleValue = title.trim();
+                    } else if (title && typeof title === "object") {
+                      // Handle title objects from XML parsing
+                      titleValue = title._ || title.text || title.content || 
+                                  (Array.isArray(title) ? title.join(" ") : String(title)).trim();
+                    }
+                    
+                    if (titleValue && titleValue.length > 0) {
+                      references.push({ 
+                        title: titleValue, 
+                        doi, 
+                        authors: authStr, 
+                        year 
+                      });
+                    }
                   }
                   if (references.length) paper.references = references;
                 }

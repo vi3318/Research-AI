@@ -9,7 +9,7 @@ const swaggerJsdoc = require("swagger-jsdoc");
 const client = require("prom-client");
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: require('path').join(__dirname, '..', '.env') });
 
 // Import routes
 const researchRoutes = require("./routes/research");
@@ -18,10 +18,20 @@ const semanticRoutes = require("./routes/semantic");
 const exportRoutes = require("./routes/export");
 const alertRoutes = require("./routes/alerts");
 const chatRoutes = require("./routes/chat");
+const simpleChatRoutes = require("./routes/simple-chat");
 const enhancedResearchRoutes = require("./routes/enhancedResearch");
 // const adminRoutes = require("./routes/admin");
 const presentationRoutes = require("./routes/presentation");
 const autoPptRoutes = require("./routes/autoPpt");
+const simpleAutoPptRoutes = require("./routes/simple-auto-ppt");
+const humanizerRoutes = require("./routes/humanizer");
+const citationRoutes = require("./routes/citations");
+
+// New collaborative features routes
+const workspacesRoutes = require("./routes/workspaces");
+const notesRoutes = require("./routes/notes");
+const analyticsRoutes = require("./routes/analytics");
+const documentsRoutes = require("./routes/documents");
 // // const databaseCleanupService = require("./services/databaseCleanupService");
 
 // Create Express app
@@ -53,10 +63,20 @@ app.use("/api/semantic", semanticRoutes);
 app.use("/api/export", exportRoutes);
 app.use("/api/alerts", alertRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/chat", simpleChatRoutes);
 app.use("/api/enhanced-research", enhancedResearchRoutes);
 // app.use("/api/admin", adminRoutes);
 app.use("/api/presentation", presentationRoutes);
 app.use("/api/auto-ppt", autoPptRoutes);
+app.use("/api/simple-auto-ppt", simpleAutoPptRoutes);
+app.use("/api/humanizer", humanizerRoutes);
+app.use("/api/citations", citationRoutes);
+
+// New collaborative features routes
+app.use("/api", workspacesRoutes);
+app.use("/api", notesRoutes);
+app.use("/api", analyticsRoutes);
+app.use("/api", documentsRoutes);
 
 // Swagger setup
 const swaggerSpec = swaggerJsdoc({

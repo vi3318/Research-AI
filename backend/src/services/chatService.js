@@ -8,6 +8,8 @@ class ChatService {
       // Generate a unique title if not provided
       const sessionTitle = title || this.generateSessionTitle(metadata.query);
       
+      console.log(`Creating session for user ${userId} with title: "${sessionTitle}"`);
+      
       const { data, error } = await supabase
         .from('chat_sessions')
         .insert({
@@ -20,28 +22,35 @@ class ChatService {
 
       if (error) {
         console.error('Database error in createSession:', error.message);
-        // Return a mock session if database not ready
-        return {
-          id: `temp-${Date.now()}`,
+        console.log('Attempting fallback session creation...');
+        // Return a mock session if database not ready, but log the issue
+        const fallbackSession = {
+          id: uuidv4(),
           user_id: userId,
           title: sessionTitle,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           metadata
         };
+        console.log('Created fallback session:', fallbackSession.id);
+        return fallbackSession;
       }
+      
+      console.log('Successfully created session in database:', data.id);
       return data;
     } catch (error) {
       console.error('Database not ready in createSession:', error.message);
       // Return a mock session if database not ready
-      return {
-        id: `temp-${Date.now()}`,
+      const fallbackSession = {
+        id: uuidv4(),
         user_id: userId,
         title: sessionTitle,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         metadata
       };
+      console.log('Created fallback session due to error:', fallbackSession.id);
+      return fallbackSession;
     }
   }
 
@@ -67,6 +76,7 @@ class ChatService {
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ');
     
+    // Return clean title without any JSON formatting or extra text
     return cleanQuery || 'Research Session';
   }
 
@@ -196,14 +206,18 @@ class ChatService {
   // Add paper context to session
   async addPaperContext(sessionId, paperId, title, authors, abstract, content = '', metadata = {}) {
     try {
-      // First try to find existing record
-      const { data: existing } = await supabase
+      // First try to find existing record (without .single() to avoid errors)
+      const { data: existingRecords, error: searchError } = await supabase
         .from('paper_context')
         .select('id')
         .eq('session_id', sessionId)
-        .eq('paper_id', paperId)
-        .single();
+        .eq('paper_id', paperId);
 
+      if (searchError) {
+        console.error('Error searching for existing paper context:', searchError.message);
+      }
+
+      const existing = existingRecords && existingRecords.length > 0 ? existingRecords[0] : null;
       let data, error;
       
       if (existing) {
@@ -215,11 +229,14 @@ class ChatService {
             authors,
             abstract,
             content,
-            metadata
+            metadata,
+            updated_at: new Date().toISOString()
           })
           .eq('id', existing.id)
-          .select()
-          .single());
+          .select());
+          
+        // Get the first record from the update result
+        data = data && data.length > 0 ? data[0] : null;
       } else {
         // Insert new record
         ({ data, error } = await supabase
@@ -297,16 +314,28 @@ class ChatService {
 
   // Update session title
   async updateSessionTitle(sessionId, userId, title) {
-    const { data, error } = await supabase
-      .from('chat_sessions')
-      .update({ title })
-      .eq('id', sessionId)
-      .eq('user_id', userId)
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('chat_sessions')
+        .update({ 
+          title,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', sessionId)
+        .eq('user_id', userId)
+        .select();
 
-    if (error) throw error;
-    return data;
+      if (error) {
+        console.error('Database error in updateSessionTitle:', error.message);
+        return null;
+      }
+
+      // Return the first row if available (Supabase update returns array)
+      return data && data.length > 0 ? data[0] : null;
+    } catch (error) {
+      console.error('Error updating session title:', error.message);
+      return null;
+    }
   }
 
   // Delete session

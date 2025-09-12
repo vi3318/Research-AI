@@ -12,7 +12,8 @@ async function testSearch() {
     console.log('\nIf you want to test the endpoint manually:');
     console.log('1. Open the browser console in the frontend app');
     console.log('2. Run this command to get your auth token:');
-    console.log('   const token = await window.Clerk.session.getToken()');
+    console.log('   const { data: { session } } = await supabase.auth.getSession()');
+    console.log('   const token = session.access_token');
     console.log('3. Then test with curl:');
     console.log('   curl -X POST http://localhost:3000/api/research/search \\');
     console.log('     -H "Content-Type: application/json" \\');

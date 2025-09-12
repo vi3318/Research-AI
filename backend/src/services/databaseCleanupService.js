@@ -206,7 +206,7 @@ class DatabaseCleanupService {
    */
   async updateUserStats() {
     try {
-      // Fix anonymous users - set proper names from Clerk
+      // Fix anonymous users - set proper names from Supabase auth
       const { data: users, error: userError } = await supabase
         .from('users')
         .select('*')
@@ -219,7 +219,7 @@ class DatabaseCleanupService {
         // Generate a better name if it's anonymous
         const newName = user.email 
           ? user.email.split('@')[0] 
-          : `User_${user.clerk_id?.substring(0, 8) || 'Unknown'}`;
+          : `User_${user.id?.substring(0, 8) || 'Unknown'}`;
 
         const { error: updateError } = await supabase
           .from('users')

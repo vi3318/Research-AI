@@ -18,8 +18,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@clerk/express": "^1.7.26",
     "@google/generative-ai": "^0.24.1",
+    "@huggingface/inference": "^2.8.1",
     "@langchain/community": "^0.2.0",
     "@langchain/core": "^0.2.0",
     "@supabase/supabase-js": "^2.56.0",
@@ -27,6 +27,7 @@
     "bull": "^4.16.5",
     "canvas": "^3.2.0",
     "chart.js": "^4.5.0",
+    "citation-js": "^0.7.20",
     "colorthief": "^2.6.0",
     "cors": "^2.8.5",
     "d3": "^7.8.5",
@@ -51,9 +52,13 @@
     "uuid": "^11.1.0",
     "wink-bm25-text-search": "^3.0.2",
     "wink-nlp-utils": "^2.1.0",
-    "xml2js": "^0.6.2"
+    "ws": "^8.18.3",
+    "xml2js": "^0.6.2",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.27"
   },
   "devDependencies": {
-    "nodemon": "^3.1.10"
+    "nodemon": "^3.1.10",
+    "patch-package": "^8.0.0"
   }
 }

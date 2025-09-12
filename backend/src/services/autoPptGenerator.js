@@ -258,72 +258,129 @@ class AutoPptGenerator {
   }
 
   /**
-   * Generate content slide
+   * Generate content slide with bullet points and optional image placeholder
    */
   async generateContentSlide(slide, slideData, theme) {
-    // Set slide background
-    slide.background = { color: theme.background };
-    
-    // Header bar
-    slide.addShape('rect', {
-      x: 0,
-      y: 0,
-      w: 10,
-      h: 1.2,
-      fill: { color: theme.primary }
-    });
-    
     // Title
     slide.addText(slideData.title, {
       x: 0.5,
-      y: 0.2,
+      y: 0.3,
       w: 9,
       h: 0.8,
       fontSize: 28,
       bold: true,
-      color: theme.background,
-      fontFace: theme.fontFamily || 'Arial',
-      valign: 'middle'
+      color: theme.primary,
+      align: 'left',
+      fontFace: theme.fontFamily || 'Arial'
     });
 
-    // Content with better formatting
-    if (slideData.content) {
-      const contentLines = slideData.content.split('\n').filter(line => line.trim());
-      let formattedContent = '';
-      
-      contentLines.forEach(line => {
-        const cleanLine = line.replace(/^[•\-\*]\s*/, '').trim();
-        if (cleanLine) {
-          formattedContent += `• ${cleanLine}\n`;
-        }
-      });
+    // Check if this slide should have an image placeholder
+    const hasImagePlaceholder = slideData.hasImagePlaceholder || false;
+    const contentWidth = hasImagePlaceholder ? 5.5 : 9;
+    const contentX = 0.5;
 
+    // Content with bullet points
+    if (slideData.content) {
+      // Format content for better bullet points
+      const formattedContent = this.formatSlideContent(slideData.content);
+      
       slide.addText(formattedContent, {
-        x: 0.8,
-        y: 1.8,
-        w: 8.4,
-        h: 4.5,
-        fontSize: 20,
+        x: contentX,
+        y: 1.3,
+        w: contentWidth,
+        h: 3.8,
+        fontSize: 16,
         color: theme.text,
+        align: 'left',
         fontFace: theme.fontFamily || 'Arial',
-        bullet: { 
-          type: 'bullet',
-          code: '2022',
-          color: theme.accent,
-          marginPt: 18
-        },
-        lineSpacing: 32
+        valign: 'top',
+        bullet: { type: 'bullet', style: '•' }
       });
     }
 
-    // Side accent
-    slide.addShape('rect', {
-      x: 0.3,
-      y: 1.4,
-      w: 0.1,
-      h: 5,
-      fill: { color: theme.accent }
+    // Add image placeholder if needed
+    if (hasImagePlaceholder) {
+      this.addImagePlaceholder(slide, theme, {
+        x: 6.2,
+        y: 1.3,
+        w: 3.3,
+        h: 2.5
+      });
+      
+      // Add caption below image
+      slide.addText('[Insert relevant chart, graph, or diagram]', {
+        x: 6.2,
+        y: 4,
+        w: 3.3,
+        h: 0.5,
+        fontSize: 10,
+        color: theme.textLight,
+        align: 'center',
+        fontFace: theme.fontFamily || 'Arial',
+        italic: true
+      });
+    }
+  }
+
+  /**
+   * Add image placeholder to slide
+   */
+  addImagePlaceholder(slide, theme, position) {
+    // Add placeholder rectangle
+    slide.addShape('RECTANGLE', {
+      x: position.x,
+      y: position.y,
+      w: position.w,
+      h: position.h,
+      fill: { color: theme.background },
+      line: { color: theme.secondary, width: 2, dashType: 'dash' }
     });
+
+    // Add placeholder text
+    slide.addText('📊\nImage/Chart\nPlaceholder', {
+      x: position.x,
+      y: position.y + (position.h / 2) - 0.4,
+      w: position.w,
+      h: 0.8,
+      fontSize: 14,
+      color: theme.secondary,
+      align: 'center',
+      fontFace: theme.fontFamily || 'Arial',
+      valign: 'middle'
+    });
+  }
+
+  /**
+   * Format slide content for better presentation
+   */
+  formatSlideContent(content) {
+    if (!content) return '';
+    
+    // If content already has bullet points, clean them up
+    if (content.includes('•')) {
+      return content
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(line => {
+          // Remove existing bullets and clean up
+          const cleanLine = line.replace(/^[•\-\*]\s*/, '').trim();
+          return cleanLine;
+        })
+        .join('\n');
+    }
+    
+    // Split long content into bullet points
+    const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 20);
+    if (sentences.length > 1) {
+      return sentences
+        .slice(0, 5) // Limit to 5 points per slide
+        .map(s => s.trim())
+        .filter(s => s.length > 0)
+        .join('\n');
+    }
+    
+    return content;
   }
 
   /**

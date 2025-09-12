@@ -183,6 +183,35 @@ const exportToJSON = async (req, res) => {
   }
 };
 
+// Export presentation to PowerPoint
+const exportToPowerPoint = async (req, res) => {
+  try {
+    const { presentation } = req.body;
+
+    if (!presentation) {
+      return res.status(400).json({
+        error: true,
+        message: "Presentation data is required"
+      });
+    }
+
+    debug("Exporting presentation to PowerPoint");
+
+    const pptxBuffer = await presentationService.exportToPowerPoint(presentation);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    res.setHeader('Content-Disposition', 'attachment; filename="presentation.pptx"');
+    res.send(pptxBuffer);
+
+  } catch (error) {
+    debug("Error exporting to PowerPoint: %O", error);
+    res.status(500).json({
+      error: true,
+      message: `Failed to export to PowerPoint: ${error.message}`
+    });
+  }
+};
+
 // Generate presentation from paper ID (if paper is in session context)
 const generatePresentationFromPaperId = async (req, res) => {
   try {
@@ -218,6 +247,7 @@ module.exports = {
   generatePresentationFromPaper,
   exportToMarkdown,
   exportToJSON,
+  exportToPowerPoint,
   generatePresentationFromPaperId,
   upload // Export multer middleware
 }; 

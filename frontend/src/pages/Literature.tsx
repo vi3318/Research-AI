@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { searchLiterature } from '../lib/api'
+import CitationButton from '../components/CitationButton'
 
 export default function Literature() {
   const [topic, setTopic] = useState('')
@@ -58,6 +59,7 @@ export default function Literature() {
                   {p.url && <a className="text-brand-400 hover:underline" href={p.url} target="_blank">Link</a>}
                   {p.pdfUrl && <a className="text-brand-400 hover:underline" href={p.pdfUrl} target="_blank">PDF</a>}
                   {p.doi && <a className="text-brand-400 hover:underline" href={`https://doi.org/${p.doi}`} target="_blank">DOI</a>}
+                  <CitationButton paperData={p} variant="minimal" size="sm" />
                 </div>
               </div>
             ))}

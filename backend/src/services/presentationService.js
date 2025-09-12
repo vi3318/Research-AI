@@ -564,17 +564,21 @@ Provide a clear, structured analysis suitable for a presentation slide.`;
 
   async extractMethodology(paper, content) {
     try {
+      // Find methodology section intelligently
+      const methodologySection = this.findRelevantSection(content, ['methodology', 'method', 'approach', 'experimental setup', 'materials and methods', 'research design']);
+      const relevantContent = methodologySection || content.substring(0, 3000);
+
       const prompt = `Extract the methodology information from this research paper for a presentation slide:
 
 Paper: ${paper.title}
-Content: ${content.substring(0, 2000)}
+Content: ${relevantContent}
 
 Identify:
 1. The research approach/methodology used
-2. Key techniques or methods employed
+2. Key techniques or methods employed  
 3. Data sources or datasets used
 
-Provide a clear, structured summary.`;
+Provide a clear, structured summary focusing on the methods and approaches used in this research.`;
       
       const response = await geminiService.generateText(prompt);
       return {
@@ -594,17 +598,21 @@ Provide a clear, structured summary.`;
 
   async extractResults(paper, content) {
     try {
+      // Find results section intelligently
+      const resultsSection = this.findRelevantSection(content, ['results', 'findings', 'experimental results', 'evaluation', 'outcomes', 'analysis', 'performance']);
+      const relevantContent = resultsSection || content.substring(0, 3000);
+
       const prompt = `Extract the key results and findings from this research paper for a presentation slide:
 
 Paper: ${paper.title}
-Content: ${content.substring(0, 2000)}
+Content: ${relevantContent}
 
 Identify:
 1. Main findings and results
 2. Key metrics or measurements
 3. Implications of the results
 
-Provide a clear, structured summary.`;
+Provide a clear, structured summary focusing on the key outcomes and findings of this research.`;
       
       const response = await geminiService.generateText(prompt);
       return {
@@ -654,17 +662,21 @@ Provide a clear, structured analysis.`;
 
   async extractConclusions(paper, content) {
     try {
+      // Find conclusions section intelligently
+      const conclusionsSection = this.findRelevantSection(content, ['conclusion', 'conclusions', 'discussion', 'summary', 'future work', 'implications', 'final remarks']);
+      const relevantContent = conclusionsSection || content.substring(0, 3000);
+
       const prompt = `Extract the conclusions and future work from this research paper for a presentation slide:
 
 Paper: ${paper.title}
-Content: ${content.substring(0, 2000)}
+Content: ${relevantContent}
 
 Identify:
 1. Main conclusions drawn
 2. Future work suggested
 3. Recommendations made
 
-Provide a clear, structured summary.`;
+Provide a clear, structured summary focusing on the key takeaways and next steps from this research.`;
       
       const response = await geminiService.generateText(prompt);
       return {
@@ -759,8 +771,124 @@ Provide bullet points highlighting the most important results and insights.`;
     return markdown;
   }
 
+  // Helper method to find relevant sections in paper content
+  findRelevantSection(content, keywords) {
+    const lowerContent = content.toLowerCase();
+    let bestMatch = null;
+    let bestStart = -1;
+    
+    // Look for section headers with these keywords
+    for (const keyword of keywords) {
+      const patterns = [
+        new RegExp(`\\n\\s*${keyword}\\s*\\n`, 'i'),
+        new RegExp(`\\n\\s*\\d+\\.?\\s*${keyword}`, 'i'),
+        new RegExp(`\\n\\s*#{1,6}\\s*${keyword}`, 'i'), // Markdown headers
+        new RegExp(`\\b${keyword}\\b`, 'i')
+      ];
+      
+      for (const pattern of patterns) {
+        const match = lowerContent.match(pattern);
+        if (match && (bestStart === -1 || match.index < bestStart)) {
+          bestStart = match.index;
+          bestMatch = keyword;
+        }
+      }
+    }
+    
+    if (bestStart !== -1) {
+      // Extract content starting from the found section (up to 2000 chars)
+      const sectionContent = content.substring(bestStart, bestStart + 2000);
+      debug(`Found relevant section for keywords [${keywords.join(', ')}]: ${bestMatch}`);
+      return sectionContent;
+    }
+    
+    debug(`No specific section found for keywords [${keywords.join(', ')}], using general content`);
+    return null;
+  }
+
   async exportToJSON(presentation) {
     return JSON.stringify(presentation, null, 2);
+  }
+
+  async exportToPowerPoint(presentation) {
+    const PptxGenJS = require("pptxgenjs");
+    
+    try {
+      // Create new presentation
+      const pptx = new PptxGenJS();
+      
+      // Set presentation properties
+      pptx.author = "ResearchAI";
+      pptx.title = presentation.title || "Research Presentation";
+      pptx.subject = "Academic Research Presentation";
+      
+      // Add slides from presentation data
+      if (presentation.slides && Array.isArray(presentation.slides)) {
+        presentation.slides.forEach((slideData, index) => {
+          const slide = pptx.addSlide();
+          
+          // Add title
+          if (slideData.title) {
+            slide.addText(slideData.title, {
+              x: 0.5,
+              y: 0.5,
+              w: 9,
+              h: 1,
+              fontSize: 24,
+              bold: true,
+              color: "363636"
+            });
+          }
+          
+          // Add content
+          if (slideData.content) {
+            const content = Array.isArray(slideData.content) 
+              ? slideData.content.join('\n') 
+              : slideData.content;
+              
+            slide.addText(content, {
+              x: 0.5,
+              y: 1.8,
+              w: 9,
+              h: 5.5,
+              fontSize: 14,
+              color: "363636",
+              valign: "top"
+            });
+          }
+        });
+      } else {
+        // Fallback: create a simple slide with presentation data
+        const slide = pptx.addSlide();
+        slide.addText(presentation.title || "Research Presentation", {
+          x: 0.5,
+          y: 2,
+          w: 9,
+          h: 1,
+          fontSize: 24,
+          bold: true,
+          color: "363636",
+          align: "center"
+        });
+        
+        slide.addText("Generated by ResearchAI", {
+          x: 0.5,
+          y: 4,
+          w: 9,
+          h: 1,
+          fontSize: 16,
+          color: "666666",
+          align: "center"
+        });
+      }
+      
+      // Generate and return the PPTX buffer
+      return await pptx.writeFile({ outputType: "nodebuffer" });
+      
+    } catch (error) {
+      debug("Error generating PowerPoint: %O", error);
+      throw new Error(`Failed to generate PowerPoint: ${error.message}`);
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { useUser, SignInButton, UserButton, useAuth } from '@clerk/clerk-react'
+import { useAuth } from '../contexts/AuthContext'
+import { usePaperStorage } from '../contexts/PaperStorageContext'
 import ReactMarkdown from 'react-markdown'
 import toast from 'react-hot-toast'
 import { 
@@ -10,23 +11,9 @@ import {
 } from 'react-icons/hi'
 import { useTheme } from '../contexts/ThemeContext'
 import ResearchGapVisualization from '../components/ResearchGapVisualization'
-import {
-  getChatSessions,
-  createChatSession,
-  getSessionMessages,
-  sendMessage,
-  getSessionContext,
-  addPapersToContext,
-  updateSession,
-  deleteSession,
-  setAuthToken,
-  api,
-  analyzePaper,
-  generateVisualization,
-  generateHypotheses,
-  generatePresentation,
-  exportPresentationToMarkdown
-} from '../lib/api'
+import CitationButton from '../components/CitationButton'
+import ProtectedRoute from '../components/ProtectedRoute'
+import { apiClient } from '../lib/apiClient'
 
 interface ChatSession {
   id: string
@@ -57,22 +44,25 @@ interface Paper {
   paper_id?: string; 
   isOpenAccess?: boolean;
   oaHostType?: string;
+  year?: number | string;
+  publication?: string;
 }
 
 interface PaperContext {
   id: string
   paper_id: string
   title: string
-  authors: string
+  authors: string[] | string
   abstract: string
   content?: string
   metadata?: any
+  source?: string;
 }
 
 export default function EnhancedChat() {
-  const { user, isLoaded } = useUser()
-  const { getToken } = useAuth()
+  const { user, loading: authLoading, getToken } = useAuth()
   const { theme, isDark } = useTheme()
+  const { addPaper, addSearchResult, papers: savedPapers } = usePaperStorage()
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -95,12 +85,43 @@ export default function EnhancedChat() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Helper function to generate unique message IDs
+  const generateMessageId = (role: string) => 
+    `${role}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+
   // LocalStorage utilities for paper persistence
   const saveSearchResultsToStorage = (papers: Paper[], sessionId: string) => {
     try {
       const key = `searchResults_${sessionId}`
       localStorage.setItem(key, JSON.stringify(papers))
       console.log(`Saved ${papers.length} papers to localStorage for session ${sessionId}`)
+      
+      // Also save to our paper storage context
+      const searchResult = {
+        id: `search_${sessionId}_${Date.now()}`,
+        query: `Session ${sessionId} search`,
+        papers: papers.map(paper => ({
+          id: paper.id || `paper_${Date.now()}_${Math.random()}`,
+          title: paper.title || 'Untitled',
+          authors: paper.authors || ['Unknown Author'],
+          abstract: paper.abstract || '',
+          url: paper.url,
+          doi: paper.doi,
+          venue: paper.venue,
+          year: paper.year,
+          citations: paper.citations,
+          pdfUrl: paper.pdfUrl,
+          metadata: paper,
+          addedAt: new Date().toISOString()
+        })),
+        timestamp: new Date().toISOString(),
+        totalResults: papers.length,
+        source: 'enhanced-chat'
+      }
+      
+      // Save papers individually and add search result
+      searchResult.papers.forEach(paper => addPaper(paper))
+      addSearchResult(searchResult)
     } catch (error) {
       console.warn('Failed to save papers to localStorage:', error)
     }
@@ -141,23 +162,62 @@ export default function EnhancedChat() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // Set up auth token when user changes
+  // Set up auth and load sessions when user is available
   useEffect(() => {
-    if (isLoaded && user) {
-      getToken().then(token => {
-        setAuthToken(token)
-        loadSessions()
-      }).catch(err => {
-        console.error('Error getting token:', err)
-        toast.error('Authentication failed')
-      })
-    } else if (isLoaded && !user) {
-      setAuthToken(null)
+    if (user) {
+      console.log('User authenticated, loading sessions')
+      loadSessions()
+    } else {
       setSessions([])
       setActiveSession(null)
       setMessages([])
+      localStorage.removeItem('lastActiveSessionId')
+      localStorage.removeItem('lastActiveView')
     }
-  }, [user, isLoaded])
+  }, [user])
+
+  // Restore last active session when sessions are loaded
+  useEffect(() => {
+    if (sessions.length > 0 && user && !activeSession) {
+      restoreLastActiveSession()
+    }
+  }, [sessions, user, activeSession])
+
+  // Restore last active session from localStorage
+  const restoreLastActiveSession = () => {
+    try {
+      const lastSessionId = localStorage.getItem('lastActiveSessionId')
+      const lastActiveView = localStorage.getItem('lastActiveView') as 'chat' | 'papers' | 'analysis'
+      
+      if (lastSessionId && sessions.length > 0) {
+        const lastSession = sessions.find(s => s.id === lastSessionId)
+        if (lastSession) {
+          setActiveSession(lastSession)
+          if (lastActiveView) {
+            setActiveView(lastActiveView)
+          }
+          console.log(`Restored last active session: ${lastSession.title}`)
+        }
+      } else if (sessions.length > 0) {
+        // If no last session, select the most recent one
+        setActiveSession(sessions[0])
+      }
+    } catch (error) {
+      console.error('Error restoring last active session:', error)
+    }
+  }
+
+  // Save active session to localStorage when it changes
+  useEffect(() => {
+    if (activeSession) {
+      localStorage.setItem('lastActiveSessionId', activeSession.id)
+    }
+  }, [activeSession])
+
+  // Save active view to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem('lastActiveView', activeView)
+  }, [activeView])
 
   // Auto-scroll to bottom of messages
   useEffect(() => {
@@ -177,14 +237,28 @@ export default function EnhancedChat() {
   // Restore papers when switching to papers view or when session loads
   useEffect(() => {
     if (activeView === 'papers' && activeSession && searchResults.length === 0) {
-      // Try localStorage first (faster)
+      // Check if papers exist in PaperStorageContext first
+      if (savedPapers.length > 0) {
+        console.log(`Using ${savedPapers.length} papers from PaperStorageContext`)
+        setSearchResults(savedPapers)
+        
+        // Sync to backend session context for RAG analysis
+        apiClient.addPapersToContext(activeSession.id, savedPapers)
+          .then(() => {
+            console.log(`Synced ${savedPapers.length} papers to backend session context`)
+          })
+          .catch(err => console.error('Error syncing papers to backend:', err))
+        return
+      }
+      
+      // Fallback: Try localStorage (faster)
       const storedPapers = loadSearchResultsFromStorage(activeSession.id)
       if (storedPapers.length > 0) {
         setSearchResults(storedPapers)
         console.log(`Restored ${storedPapers.length} papers from localStorage`)
         
         // Also ensure papers are in backend session context for RAG analysis
-        addPapersToContext(activeSession.id, storedPapers)
+        apiClient.addPapersToContext(activeSession.id, storedPapers)
           .then(() => {
             console.log(`Synced ${storedPapers.length} papers to backend session context`)
           })
@@ -220,8 +294,16 @@ export default function EnhancedChat() {
 
   const loadSessions = async () => {
     try {
-      const data = await getChatSessions()
-      setSessions(data)
+      const data = await apiClient.getChatSessions()
+      console.log('Loaded sessions from database:', data)
+      // Handle both array and object response formats
+      const sessionList = Array.isArray(data) ? data : (data?.sessions || data?.data || [])
+      setSessions(sessionList)
+      
+      // Restore last active session after loading sessions
+      if (sessionList.length > 0) {
+        restoreLastActiveSession()
+      }
     } catch (error) {
       console.error('Error loading sessions:', error)
       toast.error('Failed to load sessions')
@@ -231,9 +313,11 @@ export default function EnhancedChat() {
   const loadSessionMessages = async (sessionId: string, retryCount = 0) => {
     try {
       setLoading(true)
-      const data = await getSessionMessages(sessionId)
-      setMessages(data || [])
-      console.log(`Loaded ${data?.length || 0} messages for session ${sessionId}`)
+      const data = await apiClient.getSessionMessages(sessionId)
+      // Handle both array and object response formats
+      const messageList = Array.isArray(data) ? data : (data?.messages || data?.data || [])
+      setMessages(messageList)
+      console.log(`Loaded ${messageList.length} messages for session ${sessionId}`)
     } catch (error) {
       console.error('Error loading messages:', error)
       
@@ -255,7 +339,7 @@ export default function EnhancedChat() {
   const loadSessionContext = async () => {
     if (!activeSession) return
     try {
-      const data = await getSessionContext(activeSession.id)
+      const data = await apiClient.getSessionContext(activeSession.id)
       setSessionContext(data)
       
       // Always restore papers from session context if available
@@ -285,9 +369,23 @@ export default function EnhancedChat() {
 
   const handleCreateSession = async () => {
     try {
-      const session = await createChatSession('New Chat')
-      setSessions(prev => [session, ...prev])
-      setActiveSession(session)
+      // Generate a more descriptive title based on current context
+      const timestamp = new Date().toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      })
+      const title = `Research Session ${timestamp}`
+      
+      const session = await apiClient.createChatSession(title, { 
+        createdAt: new Date().toISOString(),
+        source: 'enhanced-chat'
+      })
+      
+      // Handle both direct session object and wrapped response
+      const newSession = session?.session || session
+      
+      setSessions(prev => [newSession, ...prev])
+      setActiveSession(newSession)
       setMessages([])
       setSearchResults([])
       setGapAnalysis(null)
@@ -337,18 +435,24 @@ export default function EnhancedChat() {
     setLoading(true)
     setIsSearching(true) // Prevent session reloading during search
     
-    // Auto-update session title if it's still "New Chat"
-    if (activeSession && activeSession.title === 'New Chat' && newMessage.trim()) {
+    // Auto-update session title if it's still generic
+    if (activeSession && (
+      activeSession.title === 'New Chat' || 
+      activeSession.title.includes('Research Session') ||
+      activeSession.title === 'Research Session'
+    ) && newMessage.trim()) {
       try {
         const titleWords = newMessage.trim()
+          .toLowerCase()
+          .replace(/[^\w\s]/g, '') // Remove special characters
           .split(' ')
-          .filter(word => word.length > 2)
+          .filter(word => word.length > 2 && !['and', 'the', 'for', 'with', 'about'].includes(word))
           .slice(0, 4)
           .map(word => word.charAt(0).toUpperCase() + word.slice(1))
           .join(' ')
         
-        const newTitle = titleWords || 'Research Session'
-        await updateSession(activeSession.id, { title: newTitle })
+        const newTitle = titleWords || `Research ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
+        await apiClient.updateSession(activeSession.id, { title: newTitle })
         
         // Update local state
         setActiveSession(prev => prev ? { ...prev, title: newTitle } : prev)
@@ -434,12 +538,11 @@ export default function EnhancedChat() {
       
       // Use the enhanced multi-source search endpoint
       const maxResults = researchMode === 'simple' ? 10 : 40
-      const response = await api.post('/api/research/search', {
-        query: newMessage.trim(),
+      const response = await apiClient.searchResearch(newMessage.trim(), {
         limit: maxResults
       })
 
-      const data = response.data
+      const data = response
       clearInterval(progressInterval)
 
       // Update final search message with results
@@ -478,7 +581,7 @@ export default function EnhancedChat() {
         if (activeSession) {
           saveSearchResultsToStorage(data.papers, activeSession.id)
           // Add papers to backend session context for RAG analysis (non-blocking)
-          addPapersToContext(activeSession.id, data.papers)
+          apiClient.addPapersToContext(activeSession.id, data.papers)
             .then(() => console.log(`Added ${data.papers.length} papers to backend session context`))
             .catch(contextError => console.error('Failed to add papers to backend session context:', contextError))
         }
@@ -502,14 +605,16 @@ export default function EnhancedChat() {
       
       // Fallback to old search if enhanced search fails
       try {        
-        const response = await api.post('/api/enhanced-research/chat', {
-          message: newMessage.trim(),
-          sessionId: activeSession?.id,
-          analysisType: 'comprehensive',
-          maxResults: researchMode === 'simple' ? 10 : 40
-        })
+        const response = await apiClient.enhancedResearchChat(
+          activeSession?.id || '',
+          newMessage.trim(),
+          {
+            analysisType: 'comprehensive',
+            maxResults: researchMode === 'simple' ? 10 : 40
+          }
+        )
 
-        const data = response.data
+        const data = response
 
         // Update message with fallback results
         setMessages(prev => prev.map(msg => 
@@ -538,7 +643,7 @@ export default function EnhancedChat() {
         
         // Update session if it was created (but don't reload messages during active search)
         if (data.sessionId && !activeSession) {
-          const newSession = await getChatSessions()
+          const newSession = await apiClient.getChatSessions()
           const createdSession = newSession.find(s => s.id === data.sessionId)
           if (createdSession) {
             // Set session without triggering message reload (we already have the messages in state)
@@ -610,9 +715,11 @@ export default function EnhancedChat() {
         paper_id: taggedPaper.paper_id
       })
 
-      const data = await analyzePaper(
-        paperId,
-        question.trim(),
+      const data = await apiClient.analyzePaper(
+        {
+          ...taggedPaper,
+          question: question.trim()
+        },
         activeSession.id
       )
 
@@ -621,14 +728,14 @@ export default function EnhancedChat() {
       setMessages(prev => [
         ...prev,
         {
-          id: `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: generateMessageId('user'),
           role: 'user',
           content: `@${taggedPaper.title}: ${question}`,
           metadata: { type: 'paper_question', paperId: data.paperId },
           created_at: new Date().toISOString()
         },
         {
-          id: `assistant-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: generateMessageId('assistant'),
           role: 'assistant',
           content: data.analysis,
           metadata: { type: 'paper_analysis', paperId: data.paperId },
@@ -653,7 +760,7 @@ export default function EnhancedChat() {
         setMessages(prev => [
           ...prev,
           {
-            id: `error-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateMessageId('error'),
             role: 'assistant',
             content: `⚠️ **Analysis Temporarily Unavailable**\n\nThe paper "${taggedPaper.title}" analysis failed. This usually resolves quickly.\n\n**Quick fixes:**\n• Try again in a few seconds\n• Refresh the page and retry\n• Check if the paper is still in your results\n\nThe system is working on indexing your papers for optimal performance.`,
             metadata: { type: 'error' },
@@ -671,7 +778,7 @@ export default function EnhancedChat() {
         setMessages(prev => [
           ...prev,
           {
-            id: `error-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: generateMessageId('error'),
             role: 'assistant',
             content: `❌ **Analysis Failed**\n\nUnable to analyze the paper "${taggedPaper.title}".\n\nError: ${error.message || 'Unknown error'}\n\nPlease try again or contact support.`,
             metadata: { type: 'error' },
@@ -684,24 +791,84 @@ export default function EnhancedChat() {
   }
 
   const handleGenerateVisualization = async () => {
-    if (!activeSession) return
+    if (!activeSession) {
+      toast.error('Please create or select a session first')
+      return
+    }
 
     setLoading(true)
-    const loadingToast = toast.loading('📊 Generating research gap analysis...')
+    const loadingToast = toast.loading('📊 Initializing research gap analysis...')
     
     try {
-      const data = await generateVisualization(activeSession.id, 'comprehensive')
-
-      setGapAnalysis(data.gapAnalysis)
+      console.log('🔍 Starting gap analysis for session:', activeSession.id)
+      
+      // Update loading message with progress
+      toast.dismiss(loadingToast)
+      const progressToast = toast.loading('📊 Analyzing research papers...')
+      
+      console.log('📈 Extracting themes and patterns from papers...')
+      
+      // Make the API call
+      const data = await apiClient.generateVisualization(activeSession.id, 'comprehensive')
+      
+      // Update progress
+      toast.dismiss(progressToast)
+      const analysisToast = toast.loading('🧠 Generating insights and visualizations...')
+      
+      console.log('📊 Gap analysis data received:', {
+        hasGapAnalysis: !!data.gapAnalysis,
+        dataKeys: Object.keys(data),
+        analysisKeys: data.gapAnalysis ? Object.keys(data.gapAnalysis) : []
+      })
+      
+      // Simulate processing time for better UX
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      
+      toast.dismiss(analysisToast)
+      const visualizationToast = toast.loading('🎨 Creating interactive visualizations...')
+      
+      console.log('🎯 Processing research gaps and opportunities...')
+      
+      // Set the data
+      setGapAnalysis(data.gapAnalysis || data)
       setActiveView('analysis')
+      
+      // Final update
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      toast.dismiss(visualizationToast)
+      
+      console.log('✅ Gap analysis generation completed successfully')
+      toast.success('🎉 Research gap analysis generated successfully!')
+      
+    } catch (error: any) {
       toast.dismiss(loadingToast)
-      toast.success('Research gap analysis generated!')
-    } catch (error) {
-      toast.dismiss(loadingToast)
-      console.error('Error generating visualization:', error)
-      toast.error('Failed to generate analysis')
+      console.error('❌ Error generating gap analysis:', error)
+      
+      // Enhanced error logging
+      console.error('Error details:', {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data
+      })
+      
+      // Provide more specific error messages
+      if (error.response?.status === 400) {
+        toast.error('❌ No papers available for analysis. Please search and add papers first.')
+      } else if (error.response?.status === 401) {
+        toast.error('🔐 Authentication required. Please log in again.')
+      } else if (error.response?.status === 429) {
+        toast.error('⏳ Too many requests. Please wait a moment and try again.')
+      } else if (error.message?.includes('fetch') || error.message?.includes('network')) {
+        toast.error('🌐 Network error. Please check your connection and try again.')
+      } else if (error.message?.includes('timeout')) {
+        toast.error('⏰ Request timed out. This analysis may take longer - please try again.')
+      } else {
+        toast.error(`❌ Failed to generate analysis: ${error.message || 'Unknown error'}`)
+      }
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   const handleGenerateHypotheses = async () => {
@@ -711,7 +878,7 @@ export default function EnhancedChat() {
     const loadingToast = toast.loading('🧪 Generating novel research hypotheses...')
     
     try {
-      const data = await generateHypotheses(activeSession.id, 'AI Research')
+      const data = await apiClient.generateHypotheses(activeSession.id, 'AI Research')
       setHypotheses(data)
       setActiveView('analysis')
       toast.dismiss(loadingToast)
@@ -729,11 +896,11 @@ export default function EnhancedChat() {
     const loadingToast = toast.loading('🎯 Generating PowerPoint presentation...')
     
     try {
-      const data = await generatePresentation(paper, { extractPdfContent: true })
+      const data = await apiClient.generatePresentation(paper, { extractPdfContent: true })
       
       if (data.success && data.presentation) {
         // Export to Markdown for easy viewing
-        const markdown = await exportPresentationToMarkdown(data.presentation)
+        const markdown = await apiClient.exportPresentationToMarkdown(data.presentation)
         
         // Create a downloadable markdown file
         const blob = new Blob([markdown.markdown], { type: 'text/markdown' })
@@ -753,7 +920,7 @@ export default function EnhancedChat() {
         setMessages(prev => [
           ...prev,
           {
-            id: `assistant-${Date.now()}`,
+            id: generateMessageId('assistant'),
             role: 'assistant',
             content: `🎯 **PowerPoint Presentation Generated!**\n\nI've created a comprehensive presentation for **"${paper.title}"** with the following slides:\n\n1. **Title & Authors**\n2. **Abstract Summary**\n3. **Research Problem & Motivation**\n4. **Methodology Overview**\n5. **Key Results & Findings**\n6. **Research Gaps Identified**\n7. **Conclusions & Future Work**\n8. **References & Citations**\n\n📥 The presentation has been downloaded as a Markdown file that you can easily convert to PowerPoint or use directly.`,
             metadata: { type: 'presentation_generated', paperId: paper.doi || paper.title },
@@ -798,11 +965,11 @@ export default function EnhancedChat() {
         url: base64
       }
 
-      const data = await generatePresentation(uploadedPaper, { extractPdfContent: true })
+      const data = await apiClient.generatePresentation(uploadedPaper, { extractPdfContent: true })
       
       if (data.success && data.presentation) {
         // Export to Markdown
-        const markdown = await exportPresentationToMarkdown(data.presentation)
+        const markdown = await apiClient.exportPresentationToMarkdown(data.presentation)
         
         // Download the presentation
         const blob = new Blob([markdown.markdown], { type: 'text/markdown' })
@@ -822,7 +989,7 @@ export default function EnhancedChat() {
         setMessages(prev => [
           ...prev,
           {
-            id: `assistant-${Date.now()}`,
+            id: generateMessageId('assistant'),
             role: 'assistant',
             content: `🎯 **PowerPoint Presentation Generated from Upload!**\n\nI've created a comprehensive presentation for **"${file.name}"** with ${data.presentation.slides.length} structured slides.\n\n📥 The presentation has been downloaded as a Markdown file that you can easily convert to PowerPoint or use directly.`,
             metadata: { type: 'presentation_generated', paperId: file.name },
@@ -863,7 +1030,7 @@ export default function EnhancedChat() {
 
   const handleSessionRename = async (sessionId: string, newTitle: string) => {
     try {
-      await updateSession(sessionId, newTitle)
+      await apiClient.updateSession(sessionId, { title: newTitle })
       setSessions(prev => prev.map(s => 
         s.id === sessionId ? { ...s, title: newTitle } : s
       ))
@@ -880,7 +1047,7 @@ export default function EnhancedChat() {
 
   const handleSessionDelete = async (sessionId: string) => {
     try {
-      await deleteSession(sessionId)
+      await apiClient.deleteSession(sessionId)
       setSessions(prev => prev.filter(s => s.id !== sessionId))
       // Clear localStorage for this session
       clearStoredSearchResults(sessionId)
@@ -897,81 +1064,10 @@ export default function EnhancedChat() {
     }
   }
 
-  if (!isLoaded) {
-    return (
-      <div className="flex items-center justify-center h-screen" style={{ backgroundColor: theme.colors.background }}>
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-          className="rounded-full h-12 w-12 border-b-2"
-          style={{ borderColor: theme.colors.primary }}
-        />
-      </div>
-    )
-  }
+
 
   if (!user) {
-    return (
-      <div 
-        className="flex flex-col items-center justify-center min-h-screen px-4"
-        style={{ 
-          backgroundColor: theme.colors.background,
-          color: theme.colors.textPrimary 
-        }}
-      >
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-center space-y-8 max-w-md w-full"
-        >
-          <motion.div 
-            className="h-20 w-20 rounded-full mx-auto flex items-center justify-center"
-            style={{ 
-              background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.accent})` 
-            }}
-            animate={{ 
-              boxShadow: [
-                `0 0 20px ${theme.colors.primary}40`,
-                `0 0 40px ${theme.colors.primary}60`,
-                `0 0 20px ${theme.colors.primary}40`
-              ]
-            }}
-            transition={{ duration: 2, repeat: Infinity }}
-          >
-            <HiSparkles className="h-10 w-10 text-white" />
-          </motion.div>
-          <div>
-            <h1 
-              className="text-4xl font-bold mb-4"
-              style={{ 
-                background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.accent})`,
-                WebkitBackgroundClip: 'text',
-                WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text'
-              }}
-            >
-              Welcome to ResearchAI
-            </h1>
-            <p className="mb-8" style={{ color: theme.colors.textSecondary }}>
-              Your intelligent research assistant. Sign in to begin.
-            </p>
-            <SignInButton mode="modal">
-              <motion.button
-                className="inline-flex items-center gap-2 px-6 py-3 text-lg rounded-lg font-semibold text-white shadow-lg"
-                style={{ 
-                  background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
-                }}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-              >
-                <HiLightningBolt className="mr-2" />
-                Get Started
-              </motion.button>
-            </SignInButton>
-          </div>
-        </motion.div>
-      </div>
-    )
+    return null; // ProtectedRoute handles authentication
   }
 
   return (
@@ -1024,7 +1120,6 @@ export default function EnhancedChat() {
                     <HiX className="h-4 w-4" style={{ color: theme.colors.textSecondary }} />
                   </motion.button>
                 )}
-                <UserButton afterSignOutUrl="/" />
               </div>
             </div>
 
@@ -1282,7 +1377,7 @@ export default function EnhancedChat() {
                       <AnimatePresence>
                         {messages.map((message, index) => (
                           <motion.div
-                            key={message.id || `msg-${index}`}
+                            key={message.id || generateMessageId(`fallback-${index}`)}
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ delay: index * 0.1 }}
@@ -1603,7 +1698,29 @@ export default function EnhancedChat() {
                               className="text-xs mb-2"
                               style={{ color: theme.colors.textSecondary }}
                             >
-                              {Array.isArray(paper.authors) ? paper.authors.join(', ') : paper.authors} · {paper.source}
+                              {(() => {
+                                // Format authors - limit to 3 authors
+                                let authorsText = "Unknown Authors";
+                                if (paper.authors) {
+                                  if (Array.isArray(paper.authors)) {
+                                    const limitedAuthors = paper.authors.slice(0, 3);
+                                    authorsText = limitedAuthors.join(", ");
+                                    if (paper.authors.length > 3) {
+                                      authorsText += ` et al. (${paper.authors.length} authors)`;
+                                    }
+                                  } else if (typeof paper.authors === 'string') {
+                                    const authorsList = paper.authors.split(',').map(a => a.trim());
+                                    const limitedAuthors = authorsList.slice(0, 3);
+                                    authorsText = limitedAuthors.join(", ");
+                                    if (authorsList.length > 3) {
+                                      authorsText += ` et al. (${authorsList.length} authors)`;
+                                    }
+                                  } else {
+                                    authorsText = String(paper.authors);
+                                  }
+                                }
+                                return authorsText;
+                              })()}
                               {paper.isOpenAccess && (
                                 <span className="ml-2 px-2 py-1 bg-green-600/20 text-green-400 rounded text-xs">
                                   🟢 Open Access
@@ -1668,6 +1785,12 @@ export default function EnhancedChat() {
                                 >
                                   📄 Open
                                 </motion.button>
+                                <CitationButton 
+                                  paperData={paper} 
+                                  variant="secondary" 
+                                  size="sm"
+                                  className="text-xs"
+                                />
                                 <motion.button
                                   onClick={(e) => {
                                     e.stopPropagation()
@@ -1916,10 +2039,10 @@ export default function EnhancedChat() {
                                     >
                                       <div className="flex-1">
                                         <div className="font-medium text-sm" style={{ color: theme.colors.textPrimary }}>
-                                          {paper.title.substring(0, 60)}...
+                                          {paper.title.substring(0, 80)}...
                                         </div>
                                         <div className="text-xs" style={{ color: theme.colors.textSecondary }}>
-                                          {paper.authors?.substring(0, 40)}...
+                                          {paper.source || 'Academic Paper'}
                                         </div>
                                       </div>
                                       <motion.button
@@ -2096,7 +2219,7 @@ export default function EnhancedChat() {
                     className="text-sm"
                     style={{ color: theme.colors.textSecondary }}
                   >
-                    {Array.isArray(selectedPaper.authors) ? selectedPaper.authors.join(', ') : selectedPaper.authors}
+                    {Array.isArray(selectedPaper.authors) ? selectedPaper.authors.join(', ') : selectedPaper.authors || "Unknown Authors"}
                   </p>
                 </div>
                 <div>
@@ -2112,6 +2235,33 @@ export default function EnhancedChat() {
                   >
                     {selectedPaper.abstract}
                   </p>
+                </div>
+                {/* Additional paper metadata */}
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  {selectedPaper.source && (
+                    <div>
+                      <span className="font-medium" style={{ color: theme.colors.textPrimary }}>Source: </span>
+                      <span style={{ color: theme.colors.textSecondary }}>{selectedPaper.source}</span>
+                    </div>
+                  )}
+                  {selectedPaper.year && (
+                    <div>
+                      <span className="font-medium" style={{ color: theme.colors.textPrimary }}>Year: </span>
+                      <span style={{ color: theme.colors.textSecondary }}>{selectedPaper.year}</span>
+                    </div>
+                  )}
+                  {selectedPaper.publication && (
+                    <div>
+                      <span className="font-medium" style={{ color: theme.colors.textPrimary }}>Publication: </span>
+                      <span style={{ color: theme.colors.textSecondary }}>{selectedPaper.publication}</span>
+                    </div>
+                  )}
+                  {selectedPaper.citationCount && (
+                    <div>
+                      <span className="font-medium" style={{ color: theme.colors.textPrimary }}>Citations: </span>
+                      <span style={{ color: theme.colors.textSecondary }}>{selectedPaper.citationCount}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="flex flex-wrap gap-3">
                   {selectedPaper.url && (

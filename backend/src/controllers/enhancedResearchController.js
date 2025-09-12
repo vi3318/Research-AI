@@ -3,7 +3,7 @@ const { searchMultipleSources } = require('../services/literatureAggregatorServi
 const researchGapAnalysisService = require('../services/researchGapAnalysisService');
 const hypothesisGeneratorService = require('../services/hypothesisGeneratorService');
 const chatService = require('../services/chatService');
-const geminiService = require('../services/geminiService');
+const cerebrasService = require('../services/cerebrasService');
 const debug = require('debug')('researchai:enhanced-research');
 
 class EnhancedResearchController {
@@ -350,72 +350,124 @@ class EnhancedResearchController {
 
       if (!paper) {
         console.log('❌ Paper not found in session context');
+        console.log('Requested paper ID:', paperId);
         console.log('Available papers:', context.map(p => ({ 
           paper_id: p.paper_id, 
           doi: p.doi, 
           url: p.url, 
           title: p.title?.substring(0, 50) 
         })));
-        debug('Paper not found. Available papers: %O', context.map(p => ({ 
-          paper_id: p.paper_id, 
-          doi: p.doi, 
-          url: p.url, 
-          title: p.title?.substring(0, 50) 
-        })));
-        return res.status(404).json({ 
-          error: 'Paper not found in session context',
-          availablePapers: context.map(p => ({ id: p.paper_id, title: p.title }))
-        });
+        
+        // Try to find paper by title if exact ID match fails
+        const titleMatch = context.find(p => 
+          p.title && (
+            p.title.toLowerCase().includes(paperId.toLowerCase()) ||
+            paperId.toLowerCase().includes(p.title.toLowerCase().substring(0, 30))
+          )
+        );
+        
+        if (titleMatch) {
+          paper = titleMatch;
+          console.log('✅ Found paper by fuzzy title match');
+        } else {
+          debug('Paper not found. Available papers: %O', context.map(p => ({ 
+            paper_id: p.paper_id, 
+            doi: p.doi, 
+            url: p.url, 
+            title: p.title?.substring(0, 50) 
+          })));
+          return res.status(404).json({ 
+            error: 'Paper not found in session context. Please ensure the paper is added to the session first.',
+            debug: {
+              requested: paperId,
+              available: context.map(p => ({ 
+                id: p.paper_id || p.doi || p.url, 
+                title: p.title?.substring(0, 50) + '...' 
+              }))
+            }
+          });
+        }
       }
 
       // Enhanced RAG: Try to fetch full PDF content if not available
       let fullContent = paper.content;
+      let contentSource = "cached";
+      
       if (!fullContent && (paper.pdf_url || paper.url)) {
         try {
           debug('Attempting to fetch PDF content for RAG...');
-          const pdfProcessorService = require('../services/pdfProcessorService');
-          const pdfUrl = paper.pdf_url || paper.url;
-          fullContent = await pdfProcessorService.extractTextFromUrl(pdfUrl);
           
-          // Update the paper context with the extracted content
-          await chatService.addPaperContext(
-            sessionId, 
-            paperId, 
-            paper.title, 
-            paper.authors, 
-            paper.abstract, 
-            fullContent,
-            { ...paper.metadata, pdfProcessed: true }
-          );
-          debug('PDF content extracted and cached for RAG');
+          // Check if the URL is accessible (not a paywall)
+          const pdfUrl = paper.pdf_url || paper.url;
+          
+          // For now, we'll skip PDF extraction for paid journals and use abstract + title
+          const paywallDomains = [
+            'journals.aps.org',
+            'ieeexplore.ieee.org',
+            'link.springer.com',
+            'sciencedirect.com',
+            'wiley.com',
+            'nature.com',
+            'science.org'
+          ];
+          
+          const isPaywalled = paywallDomains.some(domain => pdfUrl.includes(domain));
+          
+          if (isPaywalled) {
+            debug('PDF appears to be behind paywall, using abstract only');
+            fullContent = `Abstract: ${paper.abstract}`;
+            contentSource = "abstract_only";
+          } else {
+            // For open access papers, we could try to extract (future enhancement)
+            debug('Open access paper detected, using abstract for now');
+            fullContent = `Abstract: ${paper.abstract}`;
+            contentSource = "abstract_only";
+          }
+          
         } catch (error) {
-          debug('PDF extraction failed, using available content: %s', error.message);
+          debug('PDF processing failed, using abstract: %s', error.message);
+          fullContent = `Abstract: ${paper.abstract}`;
+          contentSource = "abstract_fallback";
         }
       }
 
-      // Create a comprehensive RAG prompt with full content
-      const prompt = `You are a research assistant analyzing a specific paper. Answer the question based ONLY on the provided paper content.
+      // Create a comprehensive RAG prompt with available content
+      const availableContent = fullContent || paper.abstract || "No detailed content available";
+      
+      const prompt = `You are a research assistant analyzing a specific paper. Answer the question based on the provided paper information.
 
 PAPER INFORMATION:
 Title: "${paper.title}"
 Authors: ${paper.authors}
 Abstract: ${paper.abstract}
 
-${fullContent ? `FULL PAPER CONTENT:
-${fullContent.substring(0, 8000)}${fullContent.length > 8000 ? '\n\n[Content truncated for length...]' : ''}` : 'Note: Full paper content not available'}
+${contentSource === "cached" ? `FULL PAPER CONTENT:
+${availableContent.substring(0, 8000)}${availableContent.length > 8000 ? '\n\n[Content truncated for length...]' : ''}` : 
+contentSource === "abstract_only" ? `AVAILABLE CONTENT (Abstract):
+${availableContent}
+
+Note: Full paper content is not accessible (likely behind paywall). Analysis is based on title and abstract.` :
+`AVAILABLE CONTENT:
+${availableContent}
+
+Note: Limited content available for analysis.`}
 
 QUESTION: ${question}
 
 INSTRUCTIONS:
-1. Answer based strictly on the paper content provided
-2. Quote specific sections when relevant
-3. If the answer isn't in the paper, clearly state "This information is not available in the provided paper content"
-4. Be specific and detailed in your response
-5. Include page numbers or section references if available
+1. Answer based on the paper information provided
+2. If using only abstract, clearly indicate this limitation
+3. Provide the best analysis possible with available information
+4. If the answer requires information not in the available content, state this clearly
+5. Be helpful and informative despite any content limitations
+6. For paywall papers, suggest what the full paper might contain based on the abstract
 
 ANSWER:`;
 
-      const analysis = await geminiService.generateText(prompt);
+      const analysis = await cerebrasService.generatePaperAnalysis(question, [paper], {
+        maxTokens: 6000,
+        temperature: 0.6
+      });
 
       // Add the Q&A to the session messages
       await chatService.addMessage(sessionId, 'user', `About "${paper.title}": ${question}`, { 
@@ -515,7 +567,10 @@ Please provide:
 Format your response in markdown with clear sections.`;
 
     try {
-      return await geminiService.generateText(prompt);
+      return await cerebrasService.generateResearchResponse(prompt, {
+        maxTokens: 8000,
+        temperature: 0.6
+      });
     } catch (error) {
       debug('Summary generation failed: %s', error.message);
       return `Found ${papers.length} relevant papers on "${query}". The research covers various aspects including ${papers.map(p => p.title).slice(0, 3).join(', ')}. Further analysis available through specific paper questions.`;
@@ -535,7 +590,10 @@ Question: ${question}
 Provide a detailed analysis focusing specifically on the question asked. Include relevant quotes or references from the paper when possible.`;
 
     try {
-      return await geminiService.generateText(prompt);
+      return await cerebrasService.generatePaperAnalysis(question, [paper], {
+        maxTokens: 5000,
+        temperature: 0.5
+      });
     } catch (error) {
       debug('Paper analysis failed: %s', error.message);
       return `I'm unable to analyze the paper "${paper.title}" at the moment. Please try rephrasing your question or try again later.`;
@@ -720,7 +778,10 @@ For each opportunity, provide:
 Generate 5-7 concrete opportunities ranked by feasibility and impact.`;
 
     try {
-      const response = await geminiService.generateText(prompt);
+      const response = await cerebrasService.generateStructuredResponse(prompt, null, {
+        maxTokens: 7000,
+        temperature: 0.7
+      });
       return {
         focusArea: focusArea || 'General',
         opportunities: response,

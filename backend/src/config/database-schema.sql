@@ -1,9 +1,9 @@
 -- Enable Row Level Security
 ALTER DATABASE postgres SET "app.jwt_secret" TO 'your-jwt-secret';
 
--- Create users table (extends Clerk user data)
+-- Create users table (extends Supabase user data)
 CREATE TABLE users (
-  id TEXT PRIMARY KEY, -- Clerk user ID
+  id TEXT PRIMARY KEY, -- Supabase user ID
   email TEXT NOT NULL UNIQUE,
   name TEXT,
   avatar_url TEXT,

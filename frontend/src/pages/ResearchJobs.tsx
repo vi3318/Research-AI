@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { HiPlay, HiDownload, HiEye, HiClock, HiCheckCircle, HiXCircle, HiRefresh } from 'react-icons/hi'
+import { HiPlay, HiDownload, HiEye, HiClock, HiCheckCircle, HiXCircle, HiRefresh, HiBookmark } from 'react-icons/hi'
 import { useTheme } from '../contexts/ThemeContext'
-import { startResearch, getResearchStatus, getResearchResults } from '../lib/api'
+import { usePaperStorage } from '../contexts/PaperStorageContext'
+import { apiClient } from '../lib/apiClient'
 import toast from 'react-hot-toast'
 
 type Job = { 
@@ -16,6 +17,7 @@ type Job = {
 
 export default function ResearchJobs() {
   const { theme } = useTheme()
+  const { addPaper, addSearchResult, papers } = usePaperStorage()
   const [query, setQuery] = useState('')
   const [jobs, setJobs] = useState<Job[]>([])
   const [activeResult, setActiveResult] = useState<any | null>(null)
@@ -31,7 +33,7 @@ export default function ResearchJobs() {
     const loadingToast = toast.loading('🚀 Starting research job...')
     
     try {
-      const res = await startResearch(query.trim())
+      const res = await apiClient.post('/research/start', { query: query.trim() })
       const job: Job = { 
         jobId: res.jobId, 
         status: 'queued', 
@@ -57,7 +59,7 @@ export default function ResearchJobs() {
       
       const updates = await Promise.all(pending.map(async j => {
         try { 
-          return await getResearchStatus(j.jobId) 
+          return await apiClient.get(`/research/status/${j.jobId}`)
         } catch { 
           return null 
         }
@@ -80,14 +82,71 @@ export default function ResearchJobs() {
   async function openResults(jobId: string) {
     try {
       const loadingToast = toast.loading('📊 Loading results...')
-      const res = await getResearchResults(jobId)
+      const res = await apiClient.get(`/research/results/${jobId}`)
       setActiveResult(res)
+      
+      // Save papers to persistent storage
+      if (res.papersByTopic) {
+        const searchResult = {
+          id: `search_${Date.now()}`,
+          query: jobs.find(j => j.jobId === jobId)?.query || 'Research Results',
+          papers: Object.values(res.papersByTopic).flat() as any[],
+          timestamp: new Date().toISOString(),
+          totalResults: Object.values(res.papersByTopic).flat().length,
+          source: 'research-job'
+        }
+        
+        // Add each paper individually and save search result
+        searchResult.papers.forEach((paper: any) => {
+          const paperToAdd = {
+            id: paper.id || `paper_${Date.now()}_${Math.random()}`,
+            title: paper.title || 'Untitled',
+            authors: paper.authors?.split(', ') || ['Unknown Author'],
+            abstract: paper.abstract || '',
+            url: paper.url,
+            doi: paper.doi,
+            venue: paper.publication,
+            year: paper.year,
+            citations: paper.citationCount,
+            pdfUrl: paper.pdfUrl,
+            metadata: paper,
+            addedAt: new Date().toISOString()
+          }
+          addPaper(paperToAdd)
+        })
+        
+        addSearchResult(searchResult)
+      }
+      
       toast.dismiss(loadingToast)
-      toast.success('Results loaded!')
+      toast.success('Results loaded and saved!')
     } catch (error) {
       toast.error('Failed to load results')
       console.error('Results error:', error)
     }
+  }
+
+  const isPaperSaved = (paper: any) => {
+    return papers.some(p => p.id === paper.id || p.title === paper.title)
+  }
+
+  const savePaper = (paper: any) => {
+    const paperToAdd = {
+      id: paper.id || `paper_${Date.now()}_${Math.random()}`,
+      title: paper.title || 'Untitled',
+      authors: paper.authors?.split(', ') || ['Unknown Author'],
+      abstract: paper.abstract || '',
+      url: paper.url,
+      doi: paper.doi,
+      venue: paper.publication,
+      year: paper.year,
+      citations: paper.citationCount,
+      pdfUrl: paper.pdfUrl,
+      metadata: paper,
+      addedAt: new Date().toISOString()
+    }
+    addPaper(paperToAdd)
+    toast.success('Paper saved!')
   }
 
   const getStatusIcon = (status: string) => {
@@ -466,7 +525,7 @@ export default function ResearchJobs() {
                                   {paper.title}
                                 </h6>
                                 <p className="text-xs mb-3" style={{ color: theme.colors.textSecondary }}>
-                                  {paper.authors} · {paper.year} · {paper.publication} · Citations: {paper.citationCount || 0}
+                                  {paper.authors || "Unknown Authors"} · {paper.year || "Unknown Year"} · {paper.publication || "Unknown Publication"} · Citations: {paper.citationCount || 0}
                                 </p>
                                 <div className="flex flex-wrap gap-2">
                                   {paper.url && (
