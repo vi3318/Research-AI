@@ -1,10 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const debug = require('debug')('researchai:humanizer');
-const { HfInference } = require('@huggingface/inference');
-
-// Initialize HuggingFace inference with API key
-const hf = new HfInference(process.env.HUGGINGFACE_API_KEY);
 
 // Simple humanizer endpoint - no auth required for workspace usage
 router.post('/humanize', async (req, res) => {
@@ -23,8 +19,9 @@ router.post('/humanize', async (req, res) => {
       workspaceId: workspace_id
     });
 
-    // Use HuggingFace model for text humanization
-    const humanizedText = await humanizeTextWithHF(text);
+    // For now, use a simple transformation approach
+    // In production, this would call HuggingFace Transformers API
+    const humanizedText = await humanizeText(text);
     const aiDetectionScore = calculateAIDetectionScore(text, humanizedText);
 
     console.log('✅ Text humanization completed:', {
@@ -39,8 +36,7 @@ router.post('/humanize', async (req, res) => {
       ai_detection_score: aiDetectionScore,
       original_length: text.length,
       humanized_length: humanizedText.length,
-      improvement_score: Math.max(0, 100 - aiDetectionScore),
-      model_used: 'microsoft/DialoGPT-medium'
+      improvement_score: Math.max(0, 100 - aiDetectionScore)
     });
 
   } catch (error) {
@@ -243,51 +239,6 @@ function calculateAIDetectionScore(originalText, humanizedText) {
   score -= variationScore;
   
   return Math.max(15, Math.min(95, score)); // Keep between 15-95
-}
-
-// HuggingFace text humanization function using advanced NLP models
-async function humanizeTextWithHF(text) {
-  try {
-    // First, try using a paraphrasing model to humanize the text
-    if (process.env.HUGGINGFACE_API_KEY) {
-      try {
-        // Use a text generation model suitable for humanization
-        const response = await hf.textGeneration({
-          model: 'microsoft/DialoGPT-medium',
-          inputs: `Rewrite this text to sound more natural and human-like while preserving the meaning: "${text}"`,
-          parameters: {
-            max_new_tokens: Math.min(text.length * 2, 500),
-            temperature: 0.7,
-            do_sample: true,
-            top_p: 0.9,
-            repetition_penalty: 1.1
-          }
-        });
-
-        if (response && response.generated_text) {
-          // Extract the humanized portion from the response
-          const humanizedText = response.generated_text
-            .replace(/^.*?Rewrite this text.*?:/i, '')
-            .replace(/^["']|["']$/g, '')
-            .trim();
-          
-          if (humanizedText && humanizedText.length > 10) {
-            console.log('✅ HuggingFace humanization successful');
-            return humanizedText;
-          }
-        }
-      } catch (hfError) {
-        console.warn('⚠️ HuggingFace API failed, falling back to local processing:', hfError.message);
-      }
-    }
-    
-    // Fallback to local humanization if HuggingFace fails
-    return await humanizeText(text);
-    
-  } catch (error) {
-    console.error('❌ Error in HuggingFace humanization:', error);
-    return await humanizeText(text); // Fallback to local processing
-  }
 }
 
 // Helper functions

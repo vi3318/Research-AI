@@ -250,445 +250,98 @@ router.get('/download/:id', (req, res) => {
   }
 });
 
-// Enhanced slide generation logic with AI-powered content selection and formatting
+// Enhanced slide generation logic with better formatting
 async function generateEnhancedSlides(extractedData) {
-  debug('🎯 Starting intelligent slide generation...');
   const slides = [];
   
-  // Title slide (Slide 1) - Always include
+  // Title slide
   slides.push({
     type: 'title',
     title: extractedData.sections.title || 'Research Presentation',
-    content: formatIntelligentTitleSlide(extractedData)
+    content: formatTitleSlide(extractedData)
   });
 
   const sections = extractedData.sections;
   const fullText = extractedData.fullText || '';
   
-  // Use AI-powered section detection
-  const detectedSections = await detectSectionsIntelligently(fullText, sections);
+  // If standard sections don't exist, extract from subheadings
+  const detectedSections = detectSectionsFromText(fullText, sections);
   
-  // Priority queue for most important content (max 9 content slides)
-  const contentSlides = [];
-  
-  // Abstract (Slide 2) - High priority, concise
+  // Abstract slide with bullet points
   if (detectedSections.abstract) {
-    contentSlides.push({
-      priority: 10,
-      slide: {
-        type: 'content',
-        title: '📄 Abstract',
-        content: formatIntelligentAbstract(detectedSections.abstract),
-        hasImagePlaceholder: false,
-        slideNumber: 2
-      }
+    slides.push({
+      type: 'content',
+      title: 'Abstract',
+      content: formatAbstractSlide(detectedSections.abstract),
+      hasImagePlaceholder: false
     });
   }
 
-  // Introduction & Problem Statement (Slide 3) - Essential context
+  // Introduction with key points
   if (detectedSections.introduction) {
-    contentSlides.push({
-      priority: 9,
-      slide: {
-        type: 'content',
-        title: '🎯 Introduction & Problem Statement',
-        content: formatProblemStatement(detectedSections.introduction),
-        hasImagePlaceholder: false,
-        slideNumber: 3
-      }
-    });
+    const introSlides = createStructuredSlides('Introduction', detectedSections.introduction, 5);
+    slides.push(...introSlides);
   }
 
-  // Literature Review & Related Work (Slide 4) - Research context
-  if (detectedSections.literatureReview || detectedSections.relatedWork) {
-    const content = detectedSections.literatureReview || detectedSections.relatedWork;
-    contentSlides.push({
-      priority: 7,
-      slide: {
-        type: 'content',
-        title: '📚 Literature Review & Related Work',
-        content: formatLiteratureReview(content),
-        hasImagePlaceholder: false,
-        slideNumber: 4
-      }
-    });
+  // Literature Review / Related Work
+  if (detectedSections.literatureReview) {
+    const litSlides = createStructuredSlides('Literature Review', detectedSections.literatureReview, 4);
+    slides.push(...litSlides);
   }
 
-  // Methodology & Approach (Slide 5) - Core contribution
-  if (detectedSections.methodology || detectedSections.approach) {
-    const content = detectedSections.methodology || detectedSections.approach;
-    contentSlides.push({
-      priority: 9,
-      slide: {
-        type: 'content',
-        title: '⚙️ Methodology & Approach',
-        content: formatMethodologyAdvanced(content),
-        hasImagePlaceholder: true,
-        slideNumber: 5
-      }
-    });
+  // Methodology with structured points
+  if (detectedSections.methodology) {
+    const methodSlides = createStructuredSlides('Methodology', detectedSections.methodology, 5, true);
+    slides.push(...methodSlides);
   }
 
-  // Dataset & Experimental Setup (Slide 6) - Implementation details
-  if (detectedSections.dataset || detectedSections.experimentalSetup || detectedSections.implementation) {
-    const content = detectedSections.dataset || detectedSections.experimentalSetup || detectedSections.implementation;
-    contentSlides.push({
-      priority: 8,
-      slide: {
-        type: 'content',
-        title: '🗄️ Dataset & Experimental Setup',
-        content: formatDatasetExperimental(content),
-        hasImagePlaceholder: true,
-        slideNumber: 6
-      }
-    });
+  // Results with image placeholders
+  if (detectedSections.results) {
+    const resultSlides = createStructuredSlides('Results', detectedSections.results, 4, true);
+    slides.push(...resultSlides);
   }
 
-  // Results & Findings (Slide 7) - Critical outcomes
-  if (detectedSections.results || detectedSections.findings) {
-    const content = detectedSections.results || detectedSections.findings;
-    contentSlides.push({
-      priority: 10,
-      slide: {
-        type: 'content',
-        title: '📊 Results & Key Findings',
-        content: formatResultsAdvanced(content),
-        hasImagePlaceholder: true,
-        slideNumber: 7
-      }
-    });
+  // Discussion
+  if (detectedSections.discussion) {
+    const discussionSlides = createStructuredSlides('Discussion', detectedSections.discussion, 4);
+    slides.push(...discussionSlides);
   }
 
-  // Analysis & Discussion (Slide 8) - Insights and implications
-  if (detectedSections.discussion || detectedSections.analysis) {
-    const content = detectedSections.discussion || detectedSections.analysis;
-    contentSlides.push({
-      priority: 8,
-      slide: {
-        type: 'content',
-        title: '💡 Analysis & Discussion',
-        content: formatDiscussionAdvanced(content),
-        hasImagePlaceholder: false,
-        slideNumber: 8
-      }
-    });
-  }
-
-  // Conclusion & Impact (Slide 9) - Key takeaways
+  // Conclusion with key takeaways
   if (detectedSections.conclusion) {
-    contentSlides.push({
-      priority: 9,
-      slide: {
-        type: 'content',
-        title: '🎯 Conclusion & Impact',
-        content: formatConclusionAdvanced(detectedSections.conclusion),
-        hasImagePlaceholder: false,
-        slideNumber: 9
-      }
+    slides.push({
+      type: 'content',
+      title: 'Conclusion',
+      content: formatConclusionSlide(detectedSections.conclusion),
+      hasImagePlaceholder: false
     });
   }
 
-  // Future Work & Applications (Slide 10) - Forward-looking
-  if (detectedSections.futureWork || detectedSections.applications) {
-    const content = detectedSections.futureWork || detectedSections.applications;
-    contentSlides.push({
-      priority: 6,
-      slide: {
-        type: 'content',
-        title: '🚀 Future Work & Applications',
-        content: formatFutureWorkAdvanced(content),
-        hasImagePlaceholder: false,
-        slideNumber: 10
-      }
-    });
-  } else {
-    // Generate intelligent summary if no future work
-    contentSlides.push({
-      priority: 6,
-      slide: {
-        type: 'content',
-        title: '✨ Key Contributions & Impact',
-        content: generateIntelligentSummary(extractedData),
-        hasImagePlaceholder: false,
-        slideNumber: 10
-      }
+  // Process any additional subheadings found
+  for (const [key, content] of Object.entries(detectedSections.additionalSections)) {
+    if (content && content.length > 100) {
+      const additionalSlides = createStructuredSlides(
+        formatSectionTitle(key), 
+        content, 
+        4, 
+        isResultsRelated(key)
+      );
+      slides.push(...additionalSlides);
+    }
+  }
+
+  // Ensure minimum slides and add summary if needed
+  if (slides.length < 8) {
+    slides.push({
+      type: 'content',
+      title: 'Key Contributions',
+      content: generateKeyContributions(extractedData),
+      hasImagePlaceholder: false
     });
   }
 
-  // Sort by priority and select top 9 slides
-  const selectedSlides = contentSlides
-    .sort((a, b) => b.priority - a.priority)
-    .slice(0, 9)
-    .sort((a, b) => a.slide.slideNumber - b.slide.slideNumber)
-    .map(item => item.slide);
-
-  slides.push(...selectedSlides);
-
-  debug(`✅ Generated ${slides.length} intelligent slides with optimized content`);
-  
-  // Ensure slide content fits properly
-  slides.forEach((slide, index) => {
-    slide.content = optimizeSlideContentLength(slide.content, slide.type);
-    debug(`📏 Slide ${index + 1}: ${slide.title} - ${slide.content.length} chars`);
-  });
-
+  debug(`Generated ${slides.length} structured slides from paper content`);
   return slides;
-}
-// AI-powered section detection with advanced pattern matching
-async function detectSectionsIntelligently(fullText, existingSections) {
-  debug('🔍 Running intelligent section detection...');
-  
-  const sections = { ...existingSections };
-  const text = fullText.toLowerCase();
-  
-  // Advanced pattern matching for each section type
-  const sectionPatterns = {
-    abstract: /(?:abstract|summary|overview)[\s\S]*?(?=\n\s*(?:1\.|introduction|keywords)|$)/i,
-    introduction: /(?:1\.?\s*introduction|background|motivation)[\s\S]*?(?=\n\s*(?:2\.|literature|related|methodology)|$)/i,
-    literatureReview: /(?:literature\s+review|related\s+work|previous\s+work|state\s+of\s+art)[\s\S]*?(?=\n\s*(?:\d+\.|methodology|approach)|$)/i,
-    methodology: /(?:methodology|approach|method|technique|algorithm|framework)[\s\S]*?(?=\n\s*(?:\d+\.|experiment|result|evaluation)|$)/i,
-    dataset: /(?:dataset|data\s+collection|experimental\s+setup|setup|implementation)[\s\S]*?(?=\n\s*(?:\d+\.|result|evaluation|analysis)|$)/i,
-    results: /(?:results?|findings?|evaluation|performance|analysis)[\s\S]*?(?=\n\s*(?:\d+\.|discussion|conclusion)|$)/i,
-    discussion: /(?:discussion|analysis|interpretation|implications?)[\s\S]*?(?=\n\s*(?:\d+\.|conclusion|future)|$)/i,
-    conclusion: /(?:conclusion|summary|final\s+remarks?)[\s\S]*?(?=\n\s*(?:\d+\.|references?|future|acknowledgment)|$)/i,
-    futureWork: /(?:future\s+work|future\s+research|limitations?|recommendations?)[\s\S]*?(?=\n\s*(?:references?|acknowledgment)|$)/i
-  };
-
-  // Extract sections using intelligent pattern matching
-  for (const [sectionName, pattern] of Object.entries(sectionPatterns)) {
-    if (!sections[sectionName]) {
-      const match = fullText.match(pattern);
-      if (match) {
-        sections[sectionName] = match[0].trim();
-        debug(`✅ Detected ${sectionName}: ${sections[sectionName].length} chars`);
-      }
-    }
-  }
-
-  return sections;
-}
-
-// Advanced title slide formatting with intelligent content extraction
-function formatIntelligentTitleSlide(extractedData) {
-  const title = extractedData.sections.title || 'Research Presentation';
-  const authors = extractedData.sections.authors || extractIntelligentAuthors(extractedData.fullText);
-  const institution = extractedData.sections.institution || 'Academic Institution';
-  const date = extractedData.sections.date || new Date().getFullYear();
-  
-  // Extract key research area or domain
-  const researchArea = extractResearchDomain(extractedData.fullText);
-  
-  let content = `Authors: ${authors}\n\n`;
-  content += `Institution: ${institution}\n\n`;
-  content += `Year: ${date}\n\n`;
-  
-  if (researchArea) {
-    content += `Research Area: ${researchArea}\n\n`;
-  }
-  
-  // Add concise abstract preview if available
-  if (extractedData.sections.abstract) {
-    const preview = extractedData.sections.abstract
-      .split('.')[0]
-      .substring(0, 120) + '...';
-    content += `${preview}`;
-  }
-  
-  return content;
-}
-
-// Intelligent abstract formatting with key highlights
-function formatIntelligentAbstract(abstract) {
-  if (!abstract || abstract.length < 50) return 'Abstract not available';
-  
-  // Extract key components: objective, method, results, conclusion
-  const sentences = abstract.split(/[.!?]+/).filter(s => s.trim().length > 15);
-  
-  let formatted = '';
-  
-  // Identify and format different parts
-  const objective = findObjectiveSentence(sentences);
-  const method = findMethodSentence(sentences);
-  const results = findResultsSentence(sentences);
-  const conclusion = findConclusionSentence(sentences);
-  
-  if (objective) formatted += `🎯 Objective: ${objective}\n\n`;
-  if (method) formatted += `⚙️ Method: ${method}\n\n`;
-  if (results) formatted += `📊 Results: ${results}\n\n`;
-  if (conclusion) formatted += `✅ Conclusion: ${conclusion}`;
-  
-  // Fallback to bullet points if structure detection fails
-  if (!formatted) {
-    formatted = sentences.slice(0, 4)
-      .map(s => `• ${s.trim()}`)
-      .join('\n\n');
-  }
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-// Advanced problem statement formatting
-function formatProblemStatement(introduction) {
-  if (!introduction) return 'Introduction not available';
-  
-  const sentences = introduction.split(/[.!?]+/).filter(s => s.trim().length > 20);
-  
-  let formatted = '🎯 Problem Statement:\n\n';
-  
-  // Extract problem context, challenges, and objectives
-  const problemContext = sentences.slice(0, 2).join('. ');
-  const challenges = extractChallenges(sentences);
-  const objectives = extractObjectives(sentences);
-  
-  formatted += `• Context: ${problemContext}\n\n`;
-  
-  if (challenges.length > 0) {
-    formatted += `• Challenges:\n`;
-    challenges.slice(0, 2).forEach(challenge => {
-      formatted += `  - ${challenge}\n`;
-    });
-    formatted += '\n';
-  }
-  
-  if (objectives.length > 0) {
-    formatted += `• Objectives:\n`;
-    objectives.slice(0, 2).forEach(objective => {
-      formatted += `  - ${objective}\n`;
-    });
-  }
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-// Advanced methodology formatting with structure
-function formatMethodologyAdvanced(methodology) {
-  if (!methodology) return 'Methodology not available';
-  
-  const sentences = methodology.split(/[.!?]+/).filter(s => s.trim().length > 15);
-  
-  let formatted = '⚙️ Methodology Overview:\n\n';
-  
-  // Extract approach, techniques, and workflow
-  const approach = extractApproach(sentences);
-  const techniques = extractTechniques(sentences);
-  const workflow = extractWorkflow(sentences);
-  
-  if (approach) {
-    formatted += `• Approach: ${approach}\n\n`;
-  }
-  
-  if (techniques.length > 0) {
-    formatted += `• Key Techniques:\n`;
-    techniques.slice(0, 3).forEach(technique => {
-      formatted += `  - ${technique}\n`;
-    });
-    formatted += '\n';
-  }
-  
-  if (workflow.length > 0) {
-    formatted += `• Process:\n`;
-    workflow.slice(0, 3).forEach((step, index) => {
-      formatted += `  ${index + 1}. ${step}\n`;
-    });
-  }
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-// Advanced results formatting with metrics and insights
-function formatResultsAdvanced(results) {
-  if (!results) return 'Results not available';
-  
-  const sentences = results.split(/[.!?]+/).filter(s => s.trim().length > 15);
-  
-  let formatted = '📊 Key Results & Findings:\n\n';
-  
-  // Extract performance metrics, comparisons, and insights
-  const metrics = extractMetrics(sentences);
-  const comparisons = extractComparisons(sentences);
-  const insights = extractInsights(sentences);
-  
-  if (metrics.length > 0) {
-    formatted += `• Performance Metrics:\n`;
-    metrics.slice(0, 3).forEach(metric => {
-      formatted += `  - ${metric}\n`;
-    });
-    formatted += '\n';
-  }
-  
-  if (comparisons.length > 0) {
-    formatted += `• Comparative Analysis:\n`;
-    comparisons.slice(0, 2).forEach(comparison => {
-      formatted += `  - ${comparison}\n`;
-    });
-    formatted += '\n';
-  }
-  
-  if (insights.length > 0) {
-    formatted += `• Key Insights:\n`;
-    insights.slice(0, 2).forEach(insight => {
-      formatted += `  - ${insight}\n`;
-    });
-  }
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-// Optimize slide content length to fit properly
-function optimizeSlideContentLength(content, slideType) {
-  const maxLengths = {
-    title: 400,
-    content: 800,
-    conclusion: 600
-  };
-  
-  const maxLength = maxLengths[slideType] || 800;
-  
-  if (content.length <= maxLength) {
-    return content;
-  }
-  
-  // Intelligent truncation while preserving structure
-  const lines = content.split('\n');
-  let optimized = '';
-  
-  for (const line of lines) {
-    if (optimized.length + line.length + 1 <= maxLength) {
-      optimized += line + '\n';
-    } else {
-      // Try to fit a shortened version of the line
-      const availableSpace = maxLength - optimized.length - 4; // Leave space for "..."
-      if (availableSpace > 20) {
-        optimized += line.substring(0, availableSpace) + '...\n';
-      }
-      break;
-    }
-  }
-  
-  return optimized.trim();
-}
-
-// Format section content with bullet points
-function formatSectionContent(content, maxPoints = 5) {
-  if (!content || typeof content !== 'string') {
-    return 'Content not available';
-  }
-
-  // Split into sentences and clean
-  const sentences = content
-    .split(/[.!?]+/)
-    .map(s => s.trim())
-    .filter(s => s.length > 20)
-    .slice(0, maxPoints);
-
-  if (sentences.length === 0) {
-    return 'Content not available';
-  }
-
-  // Format as bullet points
-  return sentences
-    .map(sentence => `• ${sentence}`)
-    .join('\n');
 }
 
 // Format title slide with clean structure
@@ -810,19 +463,13 @@ function detectSectionsFromText(fullText, existingSections) {
     literatureReview: existingSections['literature review'] || existingSections['related work'] || 
                      extractSection(fullText, ['literature review', 'related work', 'prior work']),
     methodology: existingSections.methodology || existingSections.methods || 
-                extractSection(fullText, ['methodology', 'methods', 'approach']),
-    dataset: existingSections.dataset || existingSections['data'] ||
-            extractSection(fullText, ['dataset', 'data', 'data collection', 'corpus']),
-    experimentalSetup: existingSections['experimental setup'] || existingSections['experiment'] ||
-                      extractSection(fullText, ['experimental setup', 'experiment design', 'setup', 'configuration']),
+                extractSection(fullText, ['methodology', 'methods', 'approach', 'experimental setup']),
     results: existingSections.results || existingSections['experimental results'] ||
             extractSection(fullText, ['results', 'findings', 'experiments', 'evaluation']),
     discussion: existingSections.discussion || existingSections.analysis ||
                extractSection(fullText, ['discussion', 'analysis', 'interpretation']),
     conclusion: existingSections.conclusion || existingSections.conclusions ||
                extractSection(fullText, ['conclusion', 'conclusions', 'summary']),
-    futureWork: existingSections['future work'] || existingSections['future'] ||
-               extractSection(fullText, ['future work', 'future research', 'limitations']),
     additionalSections: extractAdditionalSections(fullText)
   };
   
@@ -1016,173 +663,6 @@ function isLikelySectionHeader(line) {
   ];
   
   return headerPatterns.some(pattern => pattern.test(line.trim()));
-}
-
-// Helper functions for intelligent content extraction
-function extractIntelligentAuthors(fullText) {
-  const authorPatterns = [
-    /authors?:\s*([^.\n]+)/i,
-    /by\s+([^.\n]+)/i,
-    /^([A-Z][a-z]+(?:\s+[A-Z][a-z]*\.?)*(?:\s+and\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]*\.?)*)*)/m
-  ];
-  
-  for (const pattern of authorPatterns) {
-    const match = fullText.match(pattern);
-    if (match) {
-      return match[1].trim();
-    }
-  }
-  
-  return 'Research Team';
-}
-
-function extractResearchDomain(fullText) {
-  const domains = [
-    'Machine Learning', 'Artificial Intelligence', 'Data Science', 'Computer Vision',
-    'Natural Language Processing', 'Deep Learning', 'Robotics', 'Cybersecurity',
-    'Software Engineering', 'Human-Computer Interaction', 'Bioinformatics'
-  ];
-  
-  const text = fullText.toLowerCase();
-  for (const domain of domains) {
-    if (text.includes(domain.toLowerCase())) {
-      return domain;
-    }
-  }
-  
-  return null;
-}
-
-function formatLiteratureReview(content) {
-  if (!content) return 'Literature review not available';
-  
-  const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 20);
-  
-  let formatted = '📚 Literature Review:\n\n';
-  formatted += '• Prior Research:\n';
-  
-  sentences.slice(0, 3).forEach(sentence => {
-    formatted += `  - ${sentence.trim()}\n`;
-  });
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-function formatDatasetExperimental(content) {
-  if (!content) return 'Dataset information not available';
-  
-  const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 15);
-  
-  let formatted = '🗄️ Dataset & Setup:\n\n';
-  
-  // Extract dataset details and experimental setup
-  const datasetInfo = sentences.filter(s => 
-    s.toLowerCase().includes('dataset') || s.toLowerCase().includes('data')
-  ).slice(0, 2);
-  
-  const setupInfo = sentences.filter(s => 
-    s.toLowerCase().includes('experiment') || s.toLowerCase().includes('setup')
-  ).slice(0, 2);
-  
-  if (datasetInfo.length > 0) {
-    formatted += '• Dataset:\n';
-    datasetInfo.forEach(info => {
-      formatted += `  - ${info.trim()}\n`;
-    });
-    formatted += '\n';
-  }
-  
-  if (setupInfo.length > 0) {
-    formatted += '• Experimental Setup:\n';
-    setupInfo.forEach(setup => {
-      formatted += `  - ${setup.trim()}\n`;
-    });
-  }
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-function formatDiscussionAdvanced(content) {
-  if (!content) return 'Discussion not available';
-  
-  const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 20);
-  
-  let formatted = '💡 Discussion & Analysis:\n\n';
-  
-  // Extract implications and insights
-  const implications = sentences.filter(s => 
-    s.toLowerCase().includes('implication') || s.toLowerCase().includes('significance')
-  ).slice(0, 2);
-  
-  const insights = sentences.slice(0, 3);
-  
-  if (implications.length > 0) {
-    formatted += '• Implications:\n';
-    implications.forEach(impl => {
-      formatted += `  - ${impl.trim()}\n`;
-    });
-    formatted += '\n';
-  }
-  
-  formatted += '• Key Insights:\n';
-  insights.forEach(insight => {
-    formatted += `  - ${insight.trim()}\n`;
-  });
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-function formatConclusionAdvanced(content) {
-  if (!content) return 'Conclusion not available';
-  
-  const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 15);
-  
-  let formatted = '🎯 Conclusion & Impact:\n\n';
-  
-  // Extract main conclusions and contributions
-  const conclusions = sentences.slice(0, 3);
-  
-  formatted += '• Key Takeaways:\n';
-  conclusions.forEach(conclusion => {
-    formatted += `  - ${conclusion.trim()}\n`;
-  });
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-function formatFutureWorkAdvanced(content) {
-  if (!content) return 'Future work not available';
-  
-  const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 15);
-  
-  let formatted = '🚀 Future Work & Applications:\n\n';
-  
-  sentences.slice(0, 4).forEach(sentence => {
-    formatted += `• ${sentence.trim()}\n`;
-  });
-  
-  return optimizeSlideContentLength(formatted, 'content');
-}
-
-function generateIntelligentSummary(extractedData) {
-  let formatted = '✨ Key Contributions & Impact:\n\n';
-  
-  // Extract key contributions from the research
-  if (extractedData.sections.abstract) {
-    const sentences = extractedData.sections.abstract.split(/[.!?]+/)
-      .filter(s => s.trim().length > 15)
-      .slice(0, 3);
-    
-    sentences.forEach(sentence => {
-      formatted += `• ${sentence.trim()}\n`;
-    });
-  } else {
-    formatted += '• Novel research contribution\n';
-    formatted += '• Significant performance improvements\n';
-    formatted += '• Practical applications demonstrated\n';
-  }
-  
-  return optimizeSlideContentLength(formatted, 'content');
 }
 
 module.exports = router;

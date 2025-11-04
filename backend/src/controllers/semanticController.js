@@ -4,6 +4,7 @@ const { store } = require("../services/vectorStoreService");
 const bm25 = require("../services/bm25Service");
 const { fuseScores } = require("../services/hybridSearchService");
 const { asyncHandler, badRequest } = require("../utils/errorHandler");
+const { supabase } = require("../config/supabase");
 
 /**
  * Index items into vector store
@@ -99,5 +100,109 @@ const getStatus = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { indexItems, queryItems, getStatus };
+/**
+ * Clear all indexed data for a namespace
+ * Body: { namespace: string }
+ */
+const clearIndex = asyncHandler(async (req, res) => {
+  const namespace = (req.body.namespace || "default").trim();
+  
+  console.log(`Clearing index for namespace: ${namespace}`);
+  
+  // Clear vector store
+  const items = store.namespaceToItems?.get(namespace) || [];
+  items.forEach(item => {
+    store.delete(namespace, item.id);
+  });
+  
+  // Clear BM25 index
+  bm25.clearIndex();
+  
+  res.status(200).json({ 
+    success: true, 
+    message: `Cleared ${items.length} items from namespace: ${namespace}` 
+  });
+});
+
+/**
+ * Get all indexed papers for a namespace
+ * Query: ?namespace=papers
+ */
+const getIndexedPapers = asyncHandler(async (req, res) => {
+  const namespace = (req.query.namespace || "default").trim();
+  
+  console.log(`Fetching indexed papers for namespace: ${namespace}`);
+  
+  const items = store.namespaceToItems?.get(namespace) || [];
+  
+  const papers = items.map(item => ({
+    id: item.id,
+    metadata: item.metadata,
+    indexed_at: item.indexed_at || new Date().toISOString()
+  }));
+  
+  res.status(200).json({ 
+    namespace,
+    count: papers.length,
+    papers 
+  });
+});
+
+/**
+ * Log a search query to Supabase
+ * Body: { namespace, query, searchMode, resultsCount, filterYear?, filterAuthor?, executionTime? }
+ */
+const logQuery = asyncHandler(async (req, res) => {
+  const {
+    namespace = 'default',
+    query,
+    searchMode = 'semantic',
+    resultsCount = 0,
+    filterYear,
+    filterAuthor,
+    executionTime
+  } = req.body;
+  
+  if (!query) throw badRequest("query is required");
+  
+  try {
+    const { data, error } = await supabase
+      .from('search_queries')
+      .insert([{
+        namespace,
+        query_text: query,
+        search_mode: searchMode,
+        results_count: resultsCount,
+        filter_year: filterYear || null,
+        filter_author: filterAuthor || null,
+        execution_time_ms: executionTime || null
+      }])
+      .select();
+    
+    if (error) {
+      console.error('Query logging error:', error);
+      // Don't fail the request if logging fails
+      return res.status(200).json({ 
+        success: true, 
+        logged: false,
+        message: 'Query executed but logging failed' 
+      });
+    }
+    
+    res.status(200).json({ 
+      success: true, 
+      logged: true,
+      queryId: data?.[0]?.id 
+    });
+  } catch (error) {
+    console.error('Query logging error:', error);
+    res.status(200).json({ 
+      success: true, 
+      logged: false,
+      message: 'Query executed but logging failed' 
+    });
+  }
+});
+
+module.exports = { indexItems, queryItems, getStatus, clearIndex, getIndexedPapers, logQuery };
 

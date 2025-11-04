@@ -14,12 +14,10 @@ import {
   Shield,
   Eye,
   Brain,
-  File,
   LucideIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Humanizer from '../components/Humanizer';
-import CollaborativeEditor from '../components/CollaborativeEditor';
 
 interface Workspace {
   id: string;
@@ -31,16 +29,6 @@ interface Workspace {
 }
 
 interface Note {
-  id: string;
-  title: string;
-  content: string;
-  created_at: string;
-  updated_at: string;
-  created_by: string;
-  workspace_id: string;
-}
-
-interface Document {
   id: string;
   title: string;
   content: string;
@@ -81,38 +69,23 @@ interface Activity {
   user_email: string;
 }
 
-type TabType = 'notes' | 'documents' | 'papers' | 'visuals' | 'humanizer' | 'activity';
+type TabType = 'notes' | 'papers' | 'visuals' | 'humanizer' | 'activity';
 
 const WorkspacePage: React.FC = () => {
   const { workspaceId } = useParams<{ workspaceId: string }>();
   const navigate = useNavigate();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>('documents');
+  const [activeTab, setActiveTab] = useState<TabType>('notes');
   const [loading, setLoading] = useState<boolean>(true);
   const [userRole, setUserRole] = useState<'owner' | 'admin' | 'member' | 'viewer'>('viewer');
   const [notes, setNotes] = useState<Note[]>([]);
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [currentDocument, setCurrentDocument] = useState<Document | null>(null);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
-  const [showDocumentCreator, setShowDocumentCreator] = useState<boolean>(false);
-  const [newDocumentTitle, setNewDocumentTitle] = useState<string>('');
 
   useEffect(() => {
     if (workspaceId) {
       loadWorkspace();
-      
-      // Check if we should prompt for document creation
-      const urlParams = new URLSearchParams(window.location.search);
-      const createDocTitle = urlParams.get('createDoc');
-      if (createDocTitle) {
-        setNewDocumentTitle(createDocTitle);
-        setShowDocumentCreator(true);
-        setActiveTab('documents');
-        // Clean URL
-        window.history.replaceState({}, '', `/workspace/${workspaceId}`);
-      }
     }
   }, [workspaceId]);
 
@@ -149,9 +122,6 @@ const WorkspacePage: React.FC = () => {
         case 'notes':
           await loadNotes();
           break;
-        case 'documents':
-          await loadDocuments();
-          break;
         case 'papers':
           await loadPapers();
           break;
@@ -177,19 +147,6 @@ const WorkspacePage: React.FC = () => {
     const data = await response.json();
     if (data.success) {
       setNotes(data.notes);
-    }
-  };
-
-  const loadDocuments = async () => {
-    const response = await fetch(`/api/documents/workspaces/${workspaceId}/collaborative-documents`, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-      }
-    });
-    
-    const data = await response.json();
-    if (data.success) {
-      setDocuments(data.documents);
     }
   };
 
@@ -242,53 +199,8 @@ const WorkspacePage: React.FC = () => {
     }
   };
 
-  const createDocument = async (title?: string) => {
-    try {
-      const documentTitle = title || newDocumentTitle || 'New Research Document';
-      
-      const response = await fetch(`/api/workspaces/${workspaceId}/documents`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
-        },
-        body: JSON.stringify({
-          title: documentTitle,
-          document_type: 'research_paper',
-          content: {
-            title: documentTitle,
-            blocks: [
-              {
-                type: 'heading',
-                content: documentTitle
-              },
-              {
-                type: 'paragraph',
-                content: 'Start writing your research document here...'
-              }
-            ]
-          }
-        })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        setDocuments([data.document, ...documents]);
-        setCurrentDocument(data.document);
-        setShowDocumentCreator(false);
-        setNewDocumentTitle('');
-        
-        // Navigate to document editor
-        navigate(`/workspace/${workspaceId}/editor/${data.document.id}`);
-      }
-    } catch (error) {
-      console.error('Error creating document:', error);
-    }
-  };
-
   const tabs: Array<{ id: TabType; label: string; icon: LucideIcon; color: string }> = [
     { id: 'notes', label: 'Notes', icon: FileText, color: 'bg-blue-500' },
-    { id: 'documents', label: 'Documents', icon: File, color: 'bg-indigo-500' },
     { id: 'papers', label: 'Papers', icon: BookOpen, color: 'bg-green-500' },
     { id: 'visuals', label: 'Visuals', icon: BarChart3, color: 'bg-purple-500' },
     { id: 'humanizer', label: 'Humanizer', icon: Brain, color: 'bg-pink-500' },
@@ -390,16 +302,6 @@ const WorkspacePage: React.FC = () => {
                 />
               )}
               
-              {activeTab === 'documents' && (
-                <DocumentsTab
-                  key="documents"
-                  documents={documents}
-                  workspaceId={workspaceId}
-                  onCreateDocument={createDocument}
-                  userRole={userRole}
-                />
-              )}
-              
               {activeTab === 'papers' && (
                 <PapersTab
                   key="papers"
@@ -479,69 +381,6 @@ const WorkspacePage: React.FC = () => {
           </div>
         </div>
       </div>
-
-      {/* Document Creation Modal */}
-      <AnimatePresence>
-        {showDocumentCreator && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4"
-            >
-              <div className="p-6">
-                <div className="flex items-center space-x-3 mb-4">
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <FileText className="h-6 w-6 text-blue-600" />
-                  </div>
-                  <h3 className="text-lg font-semibold text-gray-900">
-                    Create New Document
-                  </h3>
-                </div>
-                
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Document Title
-                  </label>
-                  <input
-                    type="text"
-                    value={newDocumentTitle}
-                    onChange={(e) => setNewDocumentTitle(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="Enter document title..."
-                    autoFocus
-                  />
-                </div>
-                
-                <div className="flex justify-end space-x-3">
-                  <button
-                    onClick={() => {
-                      setShowDocumentCreator(false);
-                      setNewDocumentTitle('');
-                    }}
-                    className="px-4 py-2 text-gray-600 hover:text-gray-800"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => createDocument()}
-                    disabled={!newDocumentTitle.trim()}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Create Document
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 };
@@ -596,108 +435,6 @@ const NotesTab = ({ notes, workspaceId, onCreateNote, userRole }) => (
     )}
   </motion.div>
 );
-
-// Documents Tab Component
-const DocumentsTab: React.FC<{
-  documents: Document[];
-  workspaceId?: string;
-  onCreateDocument: () => void;
-  userRole: string;
-}> = ({ documents, workspaceId, onCreateDocument, userRole }) => {
-  const [selectedDocument, setSelectedDocument] = useState<Document | null>(null);
-
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, y: -20 }}
-      className="space-y-6"
-    >
-      {!selectedDocument ? (
-        <>
-          <div className="flex justify-between items-center">
-            <h2 className="text-2xl font-bold text-gray-900">Documents</h2>
-            {(userRole === 'owner' || userRole === 'admin' || userRole === 'member') && (
-              <button
-                onClick={onCreateDocument}
-                className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-              >
-                <Plus className="h-4 w-4" />
-                <span>New Document</span>
-              </button>
-            )}
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {documents.map((doc) => (
-              <motion.div
-                key={doc.id}
-                whileHover={{ scale: 1.02 }}
-                className="bg-white p-6 rounded-lg shadow border border-gray-200 cursor-pointer hover:shadow-md transition-shadow"
-                onClick={() => setSelectedDocument(doc)}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-gray-900 mb-2">{doc.title}</h3>
-                    <p className="text-sm text-gray-600 mb-3">
-                      {doc.content.replace(/<[^>]*>/g, '').substring(0, 100)}...
-                    </p>
-                    <div className="text-xs text-gray-500">
-                      {new Date(doc.updated_at).toLocaleDateString()}
-                    </div>
-                  </div>
-                  <File className="h-5 w-5 text-indigo-500" />
-                </div>
-              </motion.div>
-            ))}
-
-            {documents.length === 0 && (
-              <div className="col-span-full text-center py-12">
-                <File className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 mb-2">No documents yet</h3>
-                <p className="text-gray-600 mb-4">Create your first collaborative document</p>
-                {(userRole === 'owner' || userRole === 'admin' || userRole === 'member') && (
-                  <button
-                    onClick={onCreateDocument}
-                    className="flex items-center space-x-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 mx-auto"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Create Document</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex items-center space-x-4">
-            <button
-              onClick={() => setSelectedDocument(null)}
-              className="flex items-center space-x-2 text-gray-600 hover:text-gray-800"
-            >
-              ← Back to Documents
-            </button>
-          </div>
-          
-          <div className="h-[600px]">
-            <CollaborativeEditor
-              documentId={selectedDocument.id}
-              workspaceId={workspaceId}
-              documentTitle={selectedDocument.title}
-              content={selectedDocument.content}
-              isReadOnly={userRole === 'viewer'}
-              onSave={(content) => {
-                // Update the document in the list
-                setSelectedDocument({ ...selectedDocument, content });
-              }}
-            />
-          </div>
-        </div>
-      )}
-    </motion.div>
-  );
-};
 
 const PapersTab = ({ papers, workspaceId, userRole }) => (
   <motion.div

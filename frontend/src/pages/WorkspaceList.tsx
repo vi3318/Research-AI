@@ -64,35 +64,71 @@ const WorkspaceList: React.FC = () => {
 
   const createWorkspace = async () => {
     try {
-      const title = prompt('Enter a title for your new research workspace:');
-      if (!title || !title.trim()) {
-        return; // User cancelled or entered empty title
+      setLoading(true);
+      
+      // Add input validation before API call
+      const workspaceName = 'New Research Workspace';
+      const workspaceDescription = 'A collaborative research workspace';
+      
+      if (!workspaceName.trim()) {
+        toast.error('Workspace name is required');
+        return;
+      }
+      
+      if (workspaceName.length > 100) {
+        toast.error('Workspace name cannot exceed 100 characters');
+        return;
+      }
+      
+      if (workspaceDescription && workspaceDescription.length > 500) {
+        toast.error('Description cannot exceed 500 characters');
+        return;
       }
 
-      const description = prompt('Enter a description (optional):') || '';
+      const data = await apiClient.createWorkspace(
+        workspaceName, 
+        workspaceDescription
+      );
       
-      const workspace = await api.createWorkspace(title.trim(), description.trim());
-      if (workspace.success) {
-        // Show confirmation and navigate to workspace
+      if (data.success) {
         toast.success('Workspace created successfully!');
-        
-        // Automatically prompt for first document creation
-        const createDoc = confirm('Would you like to create your first document now?');
-        if (createDoc) {
-          const docTitle = prompt('Enter document title:', 'Research Paper Draft');
-          if (docTitle && docTitle.trim()) {
-            // Navigate to workspace with document creation intent
-            navigate(`/workspace/${workspace.data.id}?createDoc=${encodeURIComponent(docTitle.trim())}`);
-          } else {
-            navigate(`/workspace/${workspace.data.id}`);
-          }
-        } else {
-          navigate(`/workspace/${workspace.data.id}`);
-        }
+        navigate(`/workspace/${data.workspace.id}`);
+      } else {
+        throw new Error(data.message || 'Failed to create workspace');
       }
     } catch (error) {
       console.error('Error creating workspace:', error);
-      toast.error('Failed to create workspace');
+      
+      // Handle specific error cases
+      let errorMessage = 'Failed to create workspace';
+      
+      if (error.message.includes('HTTP 400')) {
+        // Parse the actual error from the response
+        try {
+          const errorData = JSON.parse(error.message.replace('HTTP 400: Bad Request - ', ''));
+          errorMessage = errorData.message || 'Invalid workspace data';
+        } catch {
+          errorMessage = 'Invalid workspace data. Please check your input.';
+        }
+      } else if (error.message.includes('HTTP 409')) {
+        errorMessage = 'A workspace with this name already exists';
+      } else if (error.message.includes('HTTP 401')) {
+        errorMessage = 'You need to be logged in to create a workspace';
+      } else if (error.message.includes('HTTP 403')) {
+        errorMessage = 'You don\'t have permission to create workspaces';
+      } else if (error.message.includes('HTTP 503')) {
+        errorMessage = 'Service temporarily unavailable. Please try again later.';
+      } else if (error.message.includes('Authentication required')) {
+        errorMessage = 'Please log in to create a workspace';
+      } else if (error.message.includes('network') || error.message.includes('fetch')) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      toast.error(errorMessage);
+    } finally {
+      setLoading(false);
     }
   };
 
