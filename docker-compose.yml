@@ -1,0 +1,219 @@
+version: '3.8'
+
+services:
+  # =====================================================
+  # BACKEND NODE.JS API
+  # =====================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: researchai-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Node
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      
+      # Supabase
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
+      
+      # Redis
+      REDIS_URL: redis://redis:6379
+      
+      # LLM Providers
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      
+      # Rate Limiting
+      RATE_LIMIT_HUMANIZE_POINTS: ${RATE_LIMIT_HUMANIZE_POINTS:-20}
+      RATE_LIMIT_HUMANIZE_DURATION: ${RATE_LIMIT_HUMANIZE_DURATION:-60}
+      RATE_LIMIT_CHART_POINTS: ${RATE_LIMIT_CHART_POINTS:-10}
+      RATE_LIMIT_CHART_DURATION: ${RATE_LIMIT_CHART_DURATION:-60}
+      
+      # Background Jobs
+      BULL_REDIS_URL: redis://redis:6379
+      JOB_TIMEOUT_CHART: ${JOB_TIMEOUT_CHART:-60000}
+      JOB_TIMEOUT_PAPER: ${JOB_TIMEOUT_PAPER:-30000}
+      
+      # Charts
+      CHART_WIDTH: ${CHART_WIDTH:-800}
+      CHART_HEIGHT: ${CHART_HEIGHT:-600}
+    depends_on:
+      - redis
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/node_modules:/app/node_modules
+    networks:
+      - researchai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =====================================================
+  # BACKGROUND WORKERS (Bull Queue)
+  # =====================================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: researchai-worker
+    restart: unless-stopped
+    command: node src/worker.js
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      REDIS_URL: redis://redis:6379
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      CEREBRAS_API_KEY: ${CEREBRAS_API_KEY:-}
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      - redis
+    volumes:
+      - ./backend/src:/app/src
+      - ./backend/node_modules:/app/node_modules
+    networks:
+      - researchai-network
+
+  # =====================================================
+  # REDIS (Job Queue + Rate Limiting)
+  # =====================================================
+  redis:
+    image: redis:7-alpine
+    container_name: researchai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    networks:
+      - researchai-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # =====================================================
+  # Y.JS WEBSOCKET SERVER (Optional - for collaborative editing)
+  # =====================================================
+  yjs-websocket:
+    image: node:18-alpine
+    container_name: researchai-yjs
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "1234:1234"
+    environment:
+      PORT: 1234
+      YPERSISTENCE: ${YPERSISTENCE:-}
+    command: >
+      sh -c "
+        npm install -g y-websocket &&
+        PORT=1234 npx y-websocket
+      "
+    volumes:
+      - yjs-data:/app/data
+    networks:
+      - researchai-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:1234/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # =====================================================
+  # REDIS COMMANDER (Optional - Redis GUI)
+  # =====================================================
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: researchai-redis-gui
+    restart: unless-stopped
+    profiles:
+      - debug
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - researchai-network
+
+  # =====================================================
+  # BULL BOARD (Optional - Job Queue Dashboard)
+  # =====================================================
+  bull-board:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.bullboard
+    container_name: researchai-bull-board
+    restart: unless-stopped
+    profiles:
+      - debug
+    ports:
+      - "3001:3001"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: 3001
+    depends_on:
+      - redis
+    networks:
+      - researchai-network
+
+# =====================================================
+# VOLUMES
+# =====================================================
+volumes:
+  redis-data:
+    driver: local
+  yjs-data:
+    driver: local
+
+# =====================================================
+# NETWORKS
+# =====================================================
+networks:
+  researchai-network:
+    driver: bridge
+
+# =====================================================
+# USAGE INSTRUCTIONS
+# =====================================================
+# 
+# Development:
+#   docker-compose up -d
+#   docker-compose logs -f backend
+# 
+# Production:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# 
+# With debugging tools:
+#   docker-compose --profile debug up -d
+# 
+# Stop all:
+#   docker-compose down
+# 
+# Clean volumes:
+#   docker-compose down -v
+# 
+# View logs:
+#   docker-compose logs -f [service-name]
+# 
+# Restart service:
+#   docker-compose restart backend
+# 
+# Shell access:
+#   docker-compose exec backend sh
+#   docker-compose exec redis redis-cli
+# 
+# =====================================================

@@ -26,12 +26,14 @@ const autoPptRoutes = require("./routes/autoPpt");
 const simpleAutoPptRoutes = require("./routes/simple-auto-ppt");
 const humanizerRoutes = require("./routes/humanizer");
 const citationRoutes = require("./routes/citations");
+const rmriRoutes = require("./routes/rmri");
 
 // New collaborative features routes
 const workspacesRoutes = require("./routes/workspaces");
 const notesRoutes = require("./routes/notes");
 const analyticsRoutes = require("./routes/analytics");
 const documentsRoutes = require("./routes/documents");
+const collaborativeDocsRoutes = require("./routes/collaborative-documents");
 // // const databaseCleanupService = require("./services/databaseCleanupService");
 
 // Create Express app
@@ -71,12 +73,14 @@ app.use("/api/auto-ppt", autoPptRoutes);
 app.use("/api/simple-auto-ppt", simpleAutoPptRoutes);
 app.use("/api/humanizer", humanizerRoutes);
 app.use("/api/citations", citationRoutes);
+app.use("/api/rmri", rmriRoutes);
 
 // New collaborative features routes
 app.use("/api", workspacesRoutes);
 app.use("/api", notesRoutes);
 app.use("/api", analyticsRoutes);
 app.use("/api", documentsRoutes);
+app.use("/api/collab-docs", collaborativeDocsRoutes);
 
 // Swagger setup
 const swaggerSpec = swaggerJsdoc({

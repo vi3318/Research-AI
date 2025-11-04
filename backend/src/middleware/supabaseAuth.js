@@ -5,7 +5,15 @@ const supabaseAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     
+    console.log('🔐 Auth check:', {
+      hasHeader: !!authHeader,
+      headerValue: authHeader ? authHeader.substring(0, 20) + '...' : 'none',
+      path: req.path,
+      method: req.method
+    });
+    
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('❌ Missing or invalid auth header');
       return res.status(401).json({
         success: false,
         error: 'Unauthorized',

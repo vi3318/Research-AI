@@ -1,48 +1,110 @@
 const express = require('express');
+const { createClient } = require('@supabase/supabase-js');
+const { requireAuth } = require('../middleware/auth');
+const { rateLimitHumanize } = require('../middleware/rateLimit');
+const { humanizerService } = require('../services/humanizer');
 const router = express.Router();
 const debug = require('debug')('researchai:humanizer');
 
-// Simple humanizer endpoint - no auth required for workspace usage
-router.post('/humanize', async (req, res) => {
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// Enhanced humanizer endpoint with JWT auth, rate limiting, and logging
+router.post('/humanize', requireAuth, rateLimitHumanize, async (req, res) => {
+  const startTime = Date.now();
+  
   try {
-    const { text, workspace_id } = req.body;
+    const userId = req.user.id;
+    const { text, workspace_id, provider } = req.body;
     
     if (!text || !text.trim()) {
       return res.status(400).json({
+        success: false,
         error: 'Text is required',
         message: 'Please provide text to humanize'
       });
     }
 
-    console.log('🧠 Starting text humanization process...', {
+    debug('Starting text humanization...', {
+      userId,
       textLength: text.length,
-      workspaceId: workspace_id
+      workspaceId: workspace_id,
+      provider: provider || 'auto'
     });
 
-    // For now, use a simple transformation approach
-    // In production, this would call HuggingFace Transformers API
-    const humanizedText = await humanizeText(text);
-    const aiDetectionScore = calculateAIDetectionScore(text, humanizedText);
+    // Humanize using service layer
+    const result = await humanizerService.humanize(text, {
+      provider,
+      skipPreProcess: req.body.skipPreProcess,
+      skipPostProcess: req.body.skipPostProcess
+    });
 
-    console.log('✅ Text humanization completed:', {
-      originalLength: text.length,
-      humanizedLength: humanizedText.length,
-      detectionScore: aiDetectionScore
+    const processingTime = Date.now() - startTime;
+
+    // Log to database
+    try {
+      await supabase.from('humanizer_logs').insert({
+        user_id: userId,
+        workspace_id: workspace_id || null,
+        input_text: text,
+        output_text: result.rewritten,
+        provider: result.provider,
+        model: result.model,
+        input_tokens: result.usage.prompt_tokens,
+        output_tokens: result.usage.completion_tokens,
+        processing_time_ms: processingTime,
+        success: true,
+        error_message: null
+      });
+    } catch (logError) {
+      debug('Failed to log humanizer request:', logError.message);
+      // Don't fail the request if logging fails
+    }
+
+    debug('Text humanization completed:', {
+      provider: result.provider,
+      qualityScore: result.quality_score,
+      latency: processingTime
     });
 
     res.json({
       success: true,
-      humanized_text: humanizedText,
-      ai_detection_score: aiDetectionScore,
-      original_length: text.length,
-      humanized_length: humanizedText.length,
-      improvement_score: Math.max(0, 100 - aiDetectionScore)
+      humanized_text: result.rewritten,
+      original_text: result.original,
+      provider: result.provider,
+      model: result.model,
+      quality_score: result.quality_score,
+      latency_ms: processingTime,
+      llm_latency_ms: result.llm_latency_ms,
+      usage: result.usage,
+      changes: result.changes
     });
 
   } catch (error) {
-    console.error('❌ Error humanizing text:', error);
+    const processingTime = Date.now() - startTime;
+    debug('Error humanizing text:', error.message);
+    
+    // Log error to database
+    try {
+      await supabase.from('humanizer_logs').insert({
+        user_id: req.user.id,
+        workspace_id: req.body.workspace_id || null,
+        input_text: req.body.text || '',
+        output_text: '',
+        provider: req.body.provider || 'auto',
+        processing_time_ms: processingTime,
+        success: false,
+        error_message: error.message
+      });
+    } catch (logError) {
+      debug('Failed to log error:', logError.message);
+    }
     
     res.status(500).json({
+      success: false,
       error: 'Failed to humanize text',
       message: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
@@ -59,10 +121,21 @@ router.get('/health', (req, res) => {
   });
 });
 
-// Simple text humanization function
-async function humanizeText(text) {
+// Simple text humanization function with provider support
+async function humanizeText(text, provider = 'cerebras') {
   try {
-    // Advanced text transformation techniques
+    // If Cerebras API key available, use it
+    if (provider === 'cerebras' && process.env.CEREBRAS_API_KEY) {
+      return await humanizeWithCerebras(text);
+    }
+    
+    // If HuggingFace API key available, use it
+    if (provider === 'huggingface' && process.env.HF_API_KEY) {
+      return await humanizeWithHuggingFace(text);
+    }
+    
+    // Fallback to rule-based transformation
+    console.log('⚠️ Using fallback rule-based humanization (no API keys configured)');
     let humanized = text;
     
     // 1. Vary sentence structure
@@ -87,6 +160,67 @@ async function humanizeText(text) {
     return text; // Return original if processing fails
   }
 }
+
+// Cerebras API humanization
+async function humanizeWithCerebras(text) {
+  try {
+    const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.CEREBRAS_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'llama3.1-8b',
+        messages: [{
+          role: 'user',
+          content: `Rewrite the following text to make it sound more natural and human-written while preserving all key information:\n\n${text}`
+        }],
+        temperature: 0.7,
+        max_tokens: 2000
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Cerebras API error: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return data.choices[0].message.content;
+  } catch (error) {
+    console.error('Cerebras API error:', error);
+    throw error;
+  }
+}
+
+// HuggingFace API humanization
+async function humanizeWithHuggingFace(text) {
+  try {
+    const response = await fetch(
+      'https://api-inference.huggingface.co/models/facebook/bart-large-cnn',
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.HF_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ inputs: text })
+      }
+    );
+    
+    if (!response.ok) {
+      throw new Error(`HuggingFace API error: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return data[0]?.summary_text || text;
+  } catch (error) {
+    console.error('HuggingFace API error:', error);
+    throw error;
+  }
+}
+
+// Rule-based text humanization functions below...
 
 // Vary sentence structure to make it more human-like
 function varySentenceStructure(text) {

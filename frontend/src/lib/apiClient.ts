@@ -180,6 +180,10 @@ class ApiClient {
     return this.post('/workspaces', { name, description });
   }
 
+  async deleteWorkspace(workspaceId: string) {
+    return this.delete(`/workspaces/${workspaceId}`);
+  }
+
   async getWorkspaceMembers(workspaceId: string) {
     return this.get(`/workspaces/${workspaceId}/members`);
   }

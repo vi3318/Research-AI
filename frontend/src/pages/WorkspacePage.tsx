@@ -14,10 +14,15 @@ import {
   Shield,
   Eye,
   Brain,
+  File,
+  FileCode,
   LucideIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Humanizer from '../components/Humanizer';
+import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
+import DocumentsTab from '../components/DocumentsTab';
 
 interface Workspace {
   id: string;
@@ -69,19 +74,23 @@ interface Activity {
   user_email: string;
 }
 
-type TabType = 'notes' | 'papers' | 'visuals' | 'humanizer' | 'activity';
+type TabType = 'documents' | 'notes' | 'papers' | 'visuals' | 'humanizer' | 'activity';
 
 const WorkspacePage: React.FC = () => {
   const { workspaceId } = useParams<{ workspaceId: string }>();
   const navigate = useNavigate();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>('notes');
+  const [activeTab, setActiveTab] = useState<TabType>('documents');
   const [loading, setLoading] = useState<boolean>(true);
   const [userRole, setUserRole] = useState<'owner' | 'admin' | 'member' | 'viewer'>('viewer');
   const [notes, setNotes] = useState<Note[]>([]);
   const [papers, setPapers] = useState<Paper[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [activity, setActivity] = useState<Activity[]>([]);
+  const [showInviteModal, setShowInviteModal] = useState<boolean>(false);
+  const [inviteEmail, setInviteEmail] = useState<string>('');
+  const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member');
+  const [inviting, setInviting] = useState<boolean>(false);
 
   useEffect(() => {
     if (workspaceId) {
@@ -178,28 +187,76 @@ const WorkspacePage: React.FC = () => {
 
   const createNote = async () => {
     try {
+      // Get Supabase session token
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        console.error('No auth session found');
+        return;
+      }
+
       const response = await fetch(`/api/workspaces/${workspaceId}/notes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+          'Authorization': `Bearer ${session.access_token}`
         },
         body: JSON.stringify({
           title: 'New Note',
           content: { blocks: [{ text: '' }] }
         })
       });
-
+      
       const data = await response.json();
+      console.log('Create note response:', data);
+      
       if (data.success) {
         setNotes([data.note, ...notes]);
+      } else {
+        console.error('Failed to create note:', data);
       }
     } catch (error) {
       console.error('Error creating note:', error);
     }
   };
 
+  const inviteMember = async () => {
+    if (!inviteEmail.trim() || inviting) return;
+
+    setInviting(true);
+    try {
+      const response = await fetch(`/api/workspaces/${workspaceId}/members`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+        },
+        body: JSON.stringify({
+          email: inviteEmail.trim(),
+          role: inviteRole
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        alert(`Invitation sent to ${inviteEmail}`);
+        setShowInviteModal(false);
+        setInviteEmail('');
+        setInviteRole('member');
+        // Refresh members list
+        loadWorkspace();
+      } else {
+        alert(data.message || 'Failed to invite member');
+      }
+    } catch (error) {
+      console.error('Error inviting member:', error);
+      alert('Failed to send invitation. Please try again.');
+    } finally {
+      setInviting(false);
+    }
+  };
+
   const tabs: Array<{ id: TabType; label: string; icon: LucideIcon; color: string }> = [
+    { id: 'documents', label: 'Documents', icon: File, color: 'bg-indigo-500' },
     { id: 'notes', label: 'Notes', icon: FileText, color: 'bg-blue-500' },
     { id: 'papers', label: 'Papers', icon: BookOpen, color: 'bg-green-500' },
     { id: 'visuals', label: 'Visuals', icon: BarChart3, color: 'bg-purple-500' },
@@ -292,6 +349,14 @@ const WorkspacePage: React.FC = () => {
           {/* Main Content Area */}
           <div className="flex-1">
             <AnimatePresence mode="wait">
+              {activeTab === 'documents' && (
+                <DocumentsTab
+                  key="documents"
+                  workspaceId={workspaceId || ''}
+                  userRole={userRole}
+                />
+              )}
+              
               {activeTab === 'notes' && (
                 <NotesTab
                   key="notes"
@@ -343,7 +408,10 @@ const WorkspacePage: React.FC = () => {
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-gray-900">Members</h3>
                 {(userRole === 'owner' || userRole === 'admin') && (
-                  <button className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg">
+                  <button 
+                    onClick={() => setShowInviteModal(true)}
+                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  >
                     <Plus className="h-4 w-4" />
                   </button>
                 )}
@@ -381,6 +449,69 @@ const WorkspacePage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Invite Member Modal */}
+      {showInviteModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md mx-4"
+          >
+            <h3 className="text-xl font-semibold text-gray-900 mb-4">Invite Member</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  placeholder="colleague@example.com"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Role
+                </label>
+                <select
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value as 'member' | 'admin')}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+            </div>
+            
+            <div className="flex space-x-3 mt-6">
+              <button
+                onClick={() => {
+                  setShowInviteModal(false);
+                  setInviteEmail('');
+                  setInviteRole('member');
+                }}
+                className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                disabled={inviting}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={inviteMember}
+                disabled={inviting || !inviteEmail.trim()}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+              >
+                {inviting ? 'Inviting...' : 'Send Invite'}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };

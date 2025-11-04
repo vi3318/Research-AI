@@ -11,9 +11,14 @@ import {
   Star,
   Settings,
   Search,
+  Trash2,
+  Edit3,
   LucideIcon
 } from 'lucide-react';
 import { apiClient } from '../lib/apiClient';
+import { supabase } from '../lib/supabase';
+import DeleteConfirmModal from '../components/DeleteConfirmModal';
+import RenameModal from '../components/RenameModal';
 
 interface Workspace {
   id: string;
@@ -24,6 +29,7 @@ interface Workspace {
   notes_count?: number;
   papers_count?: number;
   role?: string;
+  owner_id?: string;
   updated_at: string;
   recent_members?: Array<{
     email: string;
@@ -33,17 +39,38 @@ interface Workspace {
 
 interface WorkspaceCardProps {
   workspace: Workspace;
+  onDelete: (workspaceId: string) => void;
+  onRename: (workspaceId: string) => void;
+  currentUserId: string | null;
 }
 
 const WorkspaceList: React.FC = () => {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [deleteModalOpen, setDeleteModalOpen] = useState<boolean>(false);
+  const [workspaceToDelete, setWorkspaceToDelete] = useState<string | null>(null);
+  const [renameModalOpen, setRenameModalOpen] = useState<boolean>(false);
+  const [workspaceToRename, setWorkspaceToRename] = useState<Workspace | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     loadWorkspaces();
+    getCurrentUser();
   }, []);
+
+  const getCurrentUser = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        setCurrentUserId(session.user.id);
+      }
+    } catch (error) {
+      console.error('Error getting current user:', error);
+    }
+  };
 
   const loadWorkspaces = async () => {
     try {
@@ -63,6 +90,11 @@ const WorkspaceList: React.FC = () => {
   };
 
   const createWorkspace = async () => {
+    // Prevent multiple simultaneous requests
+    if (loading) {
+      return;
+    }
+    
     try {
       setLoading(true);
       
@@ -72,16 +104,19 @@ const WorkspaceList: React.FC = () => {
       
       if (!workspaceName.trim()) {
         toast.error('Workspace name is required');
+        setLoading(false);
         return;
       }
       
       if (workspaceName.length > 100) {
         toast.error('Workspace name cannot exceed 100 characters');
+        setLoading(false);
         return;
       }
       
       if (workspaceDescription && workspaceDescription.length > 500) {
         toast.error('Description cannot exceed 500 characters');
+        setLoading(false);
         return;
       }
 
@@ -96,13 +131,13 @@ const WorkspaceList: React.FC = () => {
       } else {
         throw new Error(data.message || 'Failed to create workspace');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error creating workspace:', error);
       
       // Handle specific error cases
       let errorMessage = 'Failed to create workspace';
       
-      if (error.message.includes('HTTP 400')) {
+      if (error.message?.includes('HTTP 400')) {
         // Parse the actual error from the response
         try {
           const errorData = JSON.parse(error.message.replace('HTTP 400: Bad Request - ', ''));
@@ -110,17 +145,17 @@ const WorkspaceList: React.FC = () => {
         } catch {
           errorMessage = 'Invalid workspace data. Please check your input.';
         }
-      } else if (error.message.includes('HTTP 409')) {
+      } else if (error.message?.includes('HTTP 409')) {
         errorMessage = 'A workspace with this name already exists';
-      } else if (error.message.includes('HTTP 401')) {
+      } else if (error.message?.includes('HTTP 401')) {
         errorMessage = 'You need to be logged in to create a workspace';
-      } else if (error.message.includes('HTTP 403')) {
+      } else if (error.message?.includes('HTTP 403')) {
         errorMessage = 'You don\'t have permission to create workspaces';
-      } else if (error.message.includes('HTTP 503')) {
+      } else if (error.message?.includes('HTTP 503')) {
         errorMessage = 'Service temporarily unavailable. Please try again later.';
-      } else if (error.message.includes('Authentication required')) {
+      } else if (error.message?.includes('Authentication required')) {
         errorMessage = 'Please log in to create a workspace';
-      } else if (error.message.includes('network') || error.message.includes('fetch')) {
+      } else if (error.message?.includes('network') || error.message?.includes('fetch')) {
         errorMessage = 'Network error. Please check your connection and try again.';
       } else if (error.message) {
         errorMessage = error.message;
@@ -130,6 +165,126 @@ const WorkspaceList: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDeleteClick = (workspaceId: string) => {
+    setWorkspaceToDelete(workspaceId);
+    setDeleteModalOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!workspaceToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      // Delete workspace via API (backend handles ownership check and cascade delete)
+      const response = await apiClient.deleteWorkspace(workspaceToDelete);
+
+      if (!response.success) {
+        throw new Error(response.message || 'Failed to delete workspace');
+      }
+
+      // Remove from local state
+      setWorkspaces(prev => prev.filter(w => w.id !== workspaceToDelete));
+      
+      toast.success('Workspace deleted successfully');
+      setDeleteModalOpen(false);
+      setWorkspaceToDelete(null);
+    } catch (error: any) {
+      console.error('Error deleting workspace:', error);
+      
+      // Handle specific error messages from backend
+      let errorMessage = 'Failed to delete workspace';
+      
+      if (error.message?.includes('NOT_OWNER')) {
+        errorMessage = 'Only the workspace owner can delete the workspace';
+      } else if (error.message?.includes('WORKSPACE_NOT_FOUND')) {
+        errorMessage = 'Workspace not found';
+      } else if (error.message?.includes('Authentication required')) {
+        errorMessage = 'Please log in to delete workspace';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      toast.error(errorMessage);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleRenameClick = (workspaceId: string) => {
+    const workspace = workspaces.find(w => w.id === workspaceId);
+    if (workspace) {
+      setWorkspaceToRename(workspace);
+      setRenameModalOpen(true);
+    }
+  };
+
+  const handleRenameConfirm = async (newName: string) => {
+    if (!workspaceToRename) return;
+
+    try {
+      // Get Supabase session token
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log('🔑 Session check:', {
+        hasSession: !!session,
+        hasToken: !!session?.access_token,
+        tokenPreview: session?.access_token ? session.access_token.substring(0, 20) + '...' : 'none'
+      });
+
+      if (!session?.access_token) {
+        throw new Error('No authentication session found. Please sign in again.');
+      }
+
+      console.log('📤 Sending rename request:', {
+        workspaceId: workspaceToRename.id,
+        newName,
+        hasAuthHeader: true
+      });
+
+      // Update workspace via backend API
+      const response = await fetch(`/api/workspaces/${workspaceToRename.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ name: newName }),
+      });
+
+      console.log('📥 Response:', {
+        status: response.status,
+        ok: response.ok
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('❌ Error response:', errorData);
+        throw new Error(errorData.message || 'Failed to rename workspace');
+      }
+
+      const { workspace: updatedWorkspace } = await response.json();
+
+      // Update local state
+      setWorkspaces(prev => 
+        prev.map(w => w.id === workspaceToRename.id 
+          ? { ...w, name: newName, updated_at: updatedWorkspace.updated_at || new Date().toISOString() }
+          : w
+        )
+      );
+
+      toast.success('Workspace renamed successfully');
+      setRenameModalOpen(false);
+      setWorkspaceToRename(null);
+    } catch (error: any) {
+      console.error('Error renaming workspace:', error);
+      throw error; // Re-throw to let RenameModal handle the error display
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteModalOpen(false);
+    setWorkspaceToDelete(null);
   };
 
   const filteredWorkspaces = (workspaces || []).filter(workspace =>
@@ -155,10 +310,15 @@ const WorkspaceList: React.FC = () => {
         </div>
         <button
           onClick={createWorkspace}
-          className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          disabled={loading}
+          className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
+            loading 
+              ? 'bg-gray-400 cursor-not-allowed text-gray-200' 
+              : 'bg-blue-600 text-white hover:bg-blue-700'
+          }`}
         >
           <Plus className="h-4 w-4" />
-          <span>New Workspace</span>
+          <span>{loading ? 'Creating...' : 'New Workspace'}</span>
         </button>
       </div>
 
@@ -191,25 +351,61 @@ const WorkspaceList: React.FC = () => {
           {workspaces.length === 0 && (
             <button
               onClick={createWorkspace}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              disabled={loading}
+              className={`px-4 py-2 rounded-lg transition-colors ${
+                loading
+                  ? 'bg-gray-400 cursor-not-allowed text-gray-200'
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
             >
-              Create Workspace
+              {loading ? 'Creating...' : 'Create Workspace'}
             </button>
           )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {filteredWorkspaces.map((workspace) => (
-            <WorkspaceCard key={workspace.id} workspace={workspace} />
+            <WorkspaceCard 
+              key={workspace.id} 
+              workspace={workspace}
+              onDelete={handleDeleteClick}
+              onRename={handleRenameClick}
+              currentUserId={currentUserId}
+            />
           ))}
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={deleteModalOpen}
+        onClose={handleDeleteCancel}
+        onConfirm={handleDeleteConfirm}
+        title="Delete Workspace?"
+        message="Are you sure you want to delete this workspace? This action cannot be undone. All documents, notes, and data will be permanently deleted."
+        confirmText="Delete Workspace"
+        cancelText="Cancel"
+        isDeleting={isDeleting}
+      />
+
+      {/* Rename Modal */}
+      <RenameModal
+        isOpen={renameModalOpen}
+        onClose={() => {
+          setRenameModalOpen(false);
+          setWorkspaceToRename(null);
+        }}
+        onConfirm={handleRenameConfirm}
+        currentName={workspaceToRename?.name || ''}
+        itemType="workspace"
+        existingNames={workspaces.map(w => w.name).filter(name => name !== workspaceToRename?.name)}
+      />
     </div>
   );
 };
 
 // Workspace Card Component
-const WorkspaceCard: React.FC<WorkspaceCardProps> = ({ workspace }) => {
+const WorkspaceCard: React.FC<WorkspaceCardProps> = ({ workspace, onDelete, onRename, currentUserId }) => {
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -218,15 +414,45 @@ const WorkspaceCard: React.FC<WorkspaceCardProps> = ({ workspace }) => {
     });
   };
 
+  const isOwner = workspace.owner_id && currentUserId && workspace.owner_id === currentUserId;
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-lg shadow border border-gray-200 p-6 hover:shadow-lg transition-shadow"
+      className="bg-white rounded-lg shadow border border-gray-200 p-6 hover:shadow-lg transition-shadow relative group"
     >
+      {/* Action buttons - only visible to owner */}
+      {isOwner && (
+        <div className="absolute top-4 right-4 flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-all duration-200 z-10">
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRename(workspace.id);
+            }}
+            className="p-2 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-all duration-200"
+            title="Rename workspace"
+          >
+            <Edit3 className="h-4 w-4" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onDelete(workspace.id);
+            }}
+            className="p-2 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-all duration-200"
+            title="Delete workspace"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <Link to={`/workspace/${workspace.id}`} className="block">
         <div className="flex items-start justify-between mb-4">
-          <div className="flex-1">
+          <div className="flex-1 pr-8">
             <h3 className="text-lg font-semibold text-gray-900 mb-2 line-clamp-2">
               {workspace.name}
             </h3>
@@ -237,7 +463,7 @@ const WorkspaceCard: React.FC<WorkspaceCardProps> = ({ workspace }) => {
             )}
           </div>
           {workspace.is_starred && (
-            <Star className="h-4 w-4 text-yellow-500 flex-shrink-0 ml-2" />
+            <Star className="h-4 w-4 text-yellow-500 flex-shrink-0" />
           )}
         </div>
 

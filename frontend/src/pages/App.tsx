@@ -20,16 +20,18 @@ import WorkspacePage from './WorkspacePage'
 import DocumentEditor from './DocumentEditor'
 import WorkspaceList from './WorkspaceList'
 import QAHelp from './QAHelp'
+import { RMRIDashboard } from '../components/RMRI'
+import DocEditorProduction from '../components/DocEditorProduction'
 
 export default function App() {
   const { theme, isDark, toggleTheme } = useTheme()
   
   const tabs = [
     { to: '/', label: 'Research Assistant' },
-    { to: '/research', label: 'Research Jobs' },
     { to: '/semantic', label: 'Semantic Search' },
     { to: '/presentation', label: 'Presentation' },
     { to: '/workspace', label: 'Workspace' },
+    { to: '/rmri', label: '🤖 RMRI Agent' },
     { to: '/chat', label: 'Chat' },
   ]
   
@@ -101,7 +103,9 @@ export default function App() {
           <Route path="/presentation" element={<ProtectedRoute><Presentation /></ProtectedRoute>} />
           <Route path="/workspace" element={<ProtectedRoute><WorkspaceList /></ProtectedRoute>} />
           <Route path="/workspace/:workspaceId" element={<ProtectedRoute><WorkspacePage /></ProtectedRoute>} />
+          <Route path="/workspace/:workspaceId/document/:documentId" element={<ProtectedRoute><DocEditorProduction /></ProtectedRoute>} />
           <Route path="/workspace/:workspaceId/editor/:documentId?" element={<ProtectedRoute><DocumentEditor /></ProtectedRoute>} />
+          <Route path="/rmri" element={<ProtectedRoute><RMRIDashboard /></ProtectedRoute>} />
           <Route path="/chat" element={<SimpleChat />} />
           <Route path="/enhanced" element={<ProtectedRoute><EnhancedChat /></ProtectedRoute>} />
           <Route path="/docs" element={<QAHelp />} />

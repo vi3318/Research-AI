@@ -31,7 +31,7 @@ router.get('/workspaces', requireAuth, async (req, res) => {
 
     res.json({
       success: true,
-      workspaces: workspaces || []
+      data: workspaces || []
     });
   } catch (error) {
     console.error('Error fetching workspaces:', error);
@@ -308,6 +308,230 @@ router.post('/workspaces', requireAuth, async (req, res) => {
       success: false,
       message: 'An unexpected error occurred while creating the workspace',
       code: 'INTERNAL_ERROR',
+      ...(process.env.NODE_ENV === 'development' && { details: error.message })
+    });
+  }
+});
+
+// Update workspace (owner only)
+router.put('/workspaces/:workspaceId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { workspaceId } = req.params;
+    const { name, description, settings } = req.body;
+
+    // Verify the workspace exists and user is the owner
+    const { data: workspace, error: fetchError } = await supabase
+      .from('workspaces')
+      .select('id, name, owner_id')
+      .eq('id', workspaceId)
+      .single();
+
+    if (fetchError || !workspace) {
+      return res.status(404).json({
+        success: false,
+        message: 'Workspace not found',
+        code: 'WORKSPACE_NOT_FOUND'
+      });
+    }
+
+    // Check ownership
+    if (workspace.owner_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the workspace owner can update the workspace',
+        code: 'NOT_OWNER'
+      });
+    }
+
+    // Prepare update data
+    const updateData = {};
+
+    // Validate and update name if provided
+    if (name !== undefined) {
+      if (typeof name !== 'string') {
+        return res.status(400).json({
+          success: false,
+          message: 'Workspace name must be a string',
+          code: 'INVALID_NAME_TYPE'
+        });
+      }
+
+      const trimmedName = name.trim();
+      if (!trimmedName) {
+        return res.status(400).json({
+          success: false,
+          message: 'Workspace name cannot be empty',
+          code: 'EMPTY_NAME'
+        });
+      }
+
+      if (trimmedName.length > 100) {
+        return res.status(400).json({
+          success: false,
+          message: 'Workspace name cannot exceed 100 characters',
+          code: 'NAME_TOO_LONG'
+        });
+      }
+
+      updateData.name = trimmedName;
+    }
+
+    // Validate and update description if provided
+    if (description !== undefined) {
+      if (description && typeof description !== 'string') {
+        return res.status(400).json({
+          success: false,
+          message: 'Description must be a string',
+          code: 'INVALID_DESCRIPTION_TYPE'
+        });
+      }
+
+      if (description && description.length > 500) {
+        return res.status(400).json({
+          success: false,
+          message: 'Description cannot exceed 500 characters',
+          code: 'DESCRIPTION_TOO_LONG'
+        });
+      }
+
+      updateData.description = description;
+    }
+
+    // Update settings if provided
+    if (settings !== undefined) {
+      updateData.settings = settings;
+    }
+
+    // Update the workspace
+    updateData.updated_at = new Date().toISOString();
+
+    const { data: updatedWorkspace, error: updateError } = await supabase
+      .from('workspaces')
+      .update(updateData)
+      .eq('id', workspaceId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error('Error updating workspace:', updateError);
+      throw updateError;
+    }
+
+    // Log activity (non-critical)
+    try {
+      await supabase
+        .from('workspace_activity')
+        .insert({
+          workspace_id: workspaceId,
+          user_id: userId,
+          activity_type: 'workspace_updated',
+          description: `Updated workspace${name ? ` name to "${updateData.name}"` : ''}`
+        });
+    } catch (activityError) {
+      console.warn('Failed to log workspace update activity:', activityError);
+    }
+
+    res.json({
+      success: true,
+      workspace: updatedWorkspace,
+      message: 'Workspace updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating workspace:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update workspace',
+      error: error.message
+    });
+  }
+});
+
+// Delete workspace (owner only)
+router.delete('/workspaces/:workspaceId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { workspaceId } = req.params;
+
+    // First, verify the workspace exists and user is the owner
+    const { data: workspace, error: fetchError } = await supabase
+      .from('workspaces')
+      .select('id, name, owner_id')
+      .eq('id', workspaceId)
+      .single();
+
+    if (fetchError || !workspace) {
+      return res.status(404).json({
+        success: false,
+        message: 'Workspace not found',
+        code: 'WORKSPACE_NOT_FOUND'
+      });
+    }
+
+    // Check if user is the owner
+    if (workspace.owner_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the workspace owner can delete the workspace',
+        code: 'NOT_OWNER'
+      });
+    }
+
+    // Delete workspace (cascade delete will handle related records)
+    const { error: deleteError } = await supabase
+      .from('workspaces')
+      .delete()
+      .eq('id', workspaceId);
+
+    if (deleteError) throw deleteError;
+
+    // Log activity (optional, best effort)
+    try {
+      await supabase
+        .from('workspace_activity')
+        .insert({
+          workspace_id: workspaceId,
+          user_id: userId,
+          activity_type: 'workspace_deleted',
+          description: `Deleted workspace "${workspace.name}"`
+        });
+    } catch (activityError) {
+      console.warn('Failed to log workspace deletion activity:', activityError);
+      // Don't fail the request for activity logging errors
+    }
+
+    res.json({
+      success: true,
+      message: 'Workspace deleted successfully',
+      deletedWorkspace: {
+        id: workspace.id,
+        name: workspace.name
+      }
+    });
+  } catch (error) {
+    console.error('Error deleting workspace:', error);
+
+    // Provide specific error messages
+    if (error.message?.includes('foreign key') || error.message?.includes('constraint')) {
+      return res.status(409).json({
+        success: false,
+        message: 'Cannot delete workspace due to related records. Please contact support.',
+        code: 'CONSTRAINT_ERROR'
+      });
+    }
+
+    if (error.message?.includes('permission')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Insufficient permissions to delete workspace',
+        code: 'PERMISSION_DENIED'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete workspace',
+      code: 'DELETE_ERROR',
       ...(process.env.NODE_ENV === 'development' && { details: error.message })
     });
   }
@@ -809,6 +1033,209 @@ router.post('/workspaces/test-create', async (req, res) => {
     res.status(500).json({ 
       error: error.message,
       code: error.code
+    });
+  }
+});
+
+// =========================================
+// PIN/UNPIN PAPERS
+// =========================================
+
+// Pin a paper to workspace
+router.post('/workspaces/:id/pin', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const workspaceId = req.params.id;
+    const { paper_id, notes = '', tags = [] } = req.body;
+
+    if (!paper_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'paper_id is required'
+      });
+    }
+
+    // Check user has editor or owner role
+    const { data: membership, error: memberError } = await supabase
+      .from('workspace_users')
+      .select('role')
+      .eq('workspace_id', workspaceId)
+      .eq('user_id', userId)
+      .single();
+
+    if (memberError || !membership) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this workspace'
+      });
+    }
+
+    if (!['owner', 'editor'].includes(membership.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only owners and editors can pin papers'
+      });
+    }
+
+    // Check if paper already pinned
+    const { data: existing } = await supabase
+      .from('workspace_papers')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('paper_id', paper_id)
+      .single();
+
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: 'Paper already pinned to this workspace'
+      });
+    }
+
+    // Pin the paper
+    const { data: pin, error: pinError } = await supabase
+      .from('workspace_papers')
+      .insert({
+        workspace_id: workspaceId,
+        paper_id: paper_id,
+        added_by: userId,
+        notes,
+        tags
+      })
+      .select()
+      .single();
+
+    if (pinError) throw pinError;
+
+    res.json({
+      success: true,
+      data: pin,
+      message: 'Paper pinned successfully'
+    });
+
+  } catch (error) {
+    console.error('Error pinning paper:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to pin paper',
+      error: error.message
+    });
+  }
+});
+
+// Unpin a paper from workspace
+router.delete('/workspaces/:id/unpin', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const workspaceId = req.params.id;
+    const { paper_id } = req.body;
+
+    if (!paper_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'paper_id is required'
+      });
+    }
+
+    // Check user has editor or owner role
+    const { data: membership, error: memberError } = await supabase
+      .from('workspace_users')
+      .select('role')
+      .eq('workspace_id', workspaceId)
+      .eq('user_id', userId)
+      .single();
+
+    if (memberError || !membership) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this workspace'
+      });
+    }
+
+    if (!['owner', 'editor'].includes(membership.role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only owners and editors can unpin papers'
+      });
+    }
+
+    // Unpin the paper
+    const { error: unpinError } = await supabase
+      .from('workspace_papers')
+      .delete()
+      .eq('workspace_id', workspaceId)
+      .eq('paper_id', paper_id);
+
+    if (unpinError) throw unpinError;
+
+    res.json({
+      success: true,
+      message: 'Paper unpinned successfully'
+    });
+
+  } catch (error) {
+    console.error('Error unpinning paper:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to unpin paper',
+      error: error.message
+    });
+  }
+});
+
+// Get all pinned papers for a workspace
+router.get('/workspaces/:id/pins', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const workspaceId = req.params.id;
+
+    // Verify user has access to workspace
+    const { data: membership, error: memberError } = await supabase
+      .from('workspace_users')
+      .select('role')
+      .eq('workspace_id', workspaceId)
+      .eq('user_id', userId)
+      .single();
+
+    if (memberError || !membership) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this workspace'
+      });
+    }
+
+    // Get pinned papers with metadata
+    const { data: pins, error: pinsError } = await supabase
+      .from('workspace_papers')
+      .select(`
+        *,
+        papers:paper_id (
+          id,
+          title,
+          authors,
+          abstract,
+          publication_date,
+          url,
+          doi
+        )
+      `)
+      .eq('workspace_id', workspaceId)
+      .order('added_at', { ascending: false });
+
+    if (pinsError) throw pinsError;
+
+    res.json({
+      success: true,
+      data: pins || [],
+      count: pins ? pins.length : 0
+    });
+
+  } catch (error) {
+    console.error('Error fetching pinned papers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch pinned papers',
+      error: error.message
     });
   }
 });

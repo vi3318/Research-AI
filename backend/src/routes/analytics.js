@@ -37,10 +37,7 @@ router.get('/workspaces/:workspaceId/papers', requireAuth, async (req, res) => {
 
     const { data: papers, error } = await supabase
       .from('workspace_papers')
-      .select(`
-        *,
-        pinned_by_user:users!pinned_by(name, email, avatar_url)
-      `)
+      .select('*')
       .eq('workspace_id', workspaceId)
       .order(sortBy, { ascending: order === 'asc' })
       .limit(parseInt(limit));

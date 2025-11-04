@@ -1,0 +1,497 @@
+{
+  "info": {
+    "name": "ResearchAI API - Integration Tests",
+    "description": "Complete API collection for testing document creation, collaboration, humanization, and charts",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{jwt_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "jwt_token",
+      "value": "YOUR_JWT_TOKEN_HERE",
+      "type": "string"
+    },
+    {
+      "key": "workspace_id",
+      "value": "YOUR_WORKSPACE_ID",
+      "type": "string"
+    },
+    {
+      "key": "document_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "job_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Document Management",
+      "item": [
+        {
+          "name": "Create Document",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200 or 201', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "pm.test('Document created successfully', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.document).to.have.property('id');",
+                  "  pm.collectionVariables.set('document_id', json.document.id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"workspace_id\": \"{{workspace_id}}\",\n  \"title\": \"Test Research Paper\",\n  \"type\": \"ieee\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/collaborative-documents/create",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaborative-documents", "create"]
+            }
+          }
+        },
+        {
+          "name": "Get Document",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Document retrieved', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.document.id).to.equal(pm.collectionVariables.get('document_id'));",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/collaborative-documents/{{document_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaborative-documents", "{{document_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Update Document Content",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Document updated', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": {\n    \"type\": \"doc\",\n    \"content\": [\n      {\n        \"type\": \"heading\",\n        \"attrs\": { \"level\": 1 },\n        \"content\": [{ \"type\": \"text\", \"text\": \"Introduction\" }]\n      },\n      {\n        \"type\": \"paragraph\",\n        \"content\": [{ \"type\": \"text\", \"text\": \"This is a test document.\" }]\n      }\n    ]\n  },\n  \"title\": \"Updated Test Paper\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/collaborative-documents/{{document_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaborative-documents", "{{document_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Create Revision",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Revision created', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"change_summary\": \"Added introduction section\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/collaborative-documents/{{document_id}}/create-revision",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaborative-documents", "{{document_id}}", "create-revision"]
+            }
+          }
+        },
+        {
+          "name": "Get Revisions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Revisions retrieved', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.revisions).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/collaborative-documents/{{document_id}}/revisions",
+              "host": ["{{base_url}}"],
+              "path": ["api", "collaborative-documents", "{{document_id}}", "revisions"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Paper Pinning",
+      "item": [
+        {
+          "name": "Pin Paper",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200 or 201', () => {",
+                  "  pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+                  "});",
+                  "",
+                  "pm.test('Paper pinned', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paper_id\": \"10.1038/nature12345\",\n  \"metadata\": {\n    \"title\": \"Sample Research Paper\",\n    \"authors\": [\"Smith, J.\", \"Doe, A.\"],\n    \"publication_year\": 2024,\n    \"journal\": \"Nature\",\n    \"citation_count\": 42\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/workspaces/{{workspace_id}}/pins",
+              "host": ["{{base_url}}"],
+              "path": ["api", "workspaces", "{{workspace_id}}", "pins"]
+            }
+          }
+        },
+        {
+          "name": "Get Pinned Papers",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Pins retrieved', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.pins).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/workspaces/{{workspace_id}}/pins",
+              "host": ["{{base_url}}"],
+              "path": ["api", "workspaces", "{{workspace_id}}", "pins"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Humanizer",
+      "item": [
+        {
+          "name": "Humanize Text (Sandbox)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Text humanized', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.humanized_text).to.exist;",
+                  "  pm.expect(json.quality_score).to.be.a('number');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Utilize advanced methodologies to facilitate the implementation of comprehensive strategies.\",\n  \"workspace_id\": \"{{workspace_id}}\",\n  \"provider\": \"sandbox\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/humanize",
+              "host": ["{{base_url}}"],
+              "path": ["api", "humanize"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Chart Generation",
+      "item": [
+        {
+          "name": "Enqueue Chart Job",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 202', () => {",
+                  "  pm.expect(pm.response.code).to.equal(202);",
+                  "});",
+                  "",
+                  "pm.test('Job enqueued', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.job_id).to.exist;",
+                  "  pm.collectionVariables.set('job_id', json.job_id);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"citation_trend\",\n  \"params\": {}\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/workspaces/{{workspace_id}}/charts",
+              "host": ["{{base_url}}"],
+              "path": ["api", "workspaces", "{{workspace_id}}", "charts"]
+            }
+          }
+        },
+        {
+          "name": "Check Job Status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Job status retrieved', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.status).to.be.oneOf(['queued', 'active', 'completed', 'failed']);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/jobs/{{job_id}}/status?type=chart",
+              "host": ["{{base_url}}"],
+              "path": ["api", "jobs", "{{job_id}}", "status"],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "chart"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Workspace Charts",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});",
+                  "",
+                  "pm.test('Charts retrieved', () => {",
+                  "  const json = pm.response.json();",
+                  "  pm.expect(json.success).to.be.true;",
+                  "  pm.expect(json.data).to.be.an('array');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/workspaces/{{workspace_id}}/charts",
+              "host": ["{{base_url}}"],
+              "path": ["api", "workspaces", "{{workspace_id}}", "charts"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Health Check",
+      "item": [
+        {
+          "name": "Health Check",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status is 200', () => {",
+                  "  pm.expect(pm.response.code).to.equal(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

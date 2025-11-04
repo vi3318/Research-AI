@@ -36,15 +36,14 @@ router.get('/workspaces/:workspaceId/notes', requireAuth, async (req, res) => {
 
     const { data: notes, error } = await supabase
       .from('notes')
-      .select(`
-        *,
-        author:users!author_id(name, email, avatar_url),
-        last_editor:users!last_edited_by(name, email, avatar_url)
-      `)
+      .select('*')
       .eq('workspace_id', workspaceId)
       .order('updated_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error fetching notes:', error);
+      throw error;
+    }
 
     res.json({
       success: true,
@@ -96,14 +95,13 @@ router.post('/workspaces/:workspaceId/notes', requireAuth, async (req, res) => {
         last_edited_by: userId,
         tags
       })
-      .select(`
-        *,
-        author:users!author_id(name, email, avatar_url),
-        last_editor:users!last_edited_by(name, email, avatar_url)
-      `)
+      .select('*')
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('Error creating note:', error);
+      throw error;
+    }
 
     // Log activity
     await supabase
