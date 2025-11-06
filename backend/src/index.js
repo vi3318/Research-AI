@@ -25,6 +25,7 @@ const presentationRoutes = require("./routes/presentation");
 const autoPptRoutes = require("./routes/autoPpt");
 const simpleAutoPptRoutes = require("./routes/simple-auto-ppt");
 const humanizerRoutes = require("./routes/humanizer");
+const simpleHumanizerRoutes = require("./routes/simpleHumanizer");
 const citationRoutes = require("./routes/citations");
 const rmriRoutes = require("./routes/rmri");
 
@@ -34,6 +35,12 @@ const notesRoutes = require("./routes/notes");
 const analyticsRoutes = require("./routes/analytics");
 const documentsRoutes = require("./routes/documents");
 const collaborativeDocsRoutes = require("./routes/collaborative-documents");
+const pinnedPapersRoutes = require("./routes/pinnedPapers");
+const chartsRoutes = require("./routes/charts");
+
+// New semantic search routes
+const semanticSearchRoutes = require("./routes/semanticSearchRoutes");
+
 // // const databaseCleanupService = require("./services/databaseCleanupService");
 
 // Create Express app
@@ -48,13 +55,15 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
-app.use(express.json());
+// Increase payload size limit for PDF uploads (50MB)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(morgan("dev"));
 
-// Basic rate limiting
+// Basic rate limiting - increased for RMRI status polling
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 500, // Increased from 100 to 500 to accommodate status polling
 });
 app.use(limiter);
 
@@ -62,6 +71,8 @@ app.use(limiter);
 app.use("/api/research", researchRoutes);
 app.use("/api/literature", literatureRoutes);
 app.use("/api/semantic", semanticRoutes);
+app.use("/api/semantic-search", semanticSearchRoutes); // New semantic search with vector DB
+app.use("/api", semanticSearchRoutes); // Also mount at /api for /api/papers routes
 app.use("/api/export", exportRoutes);
 app.use("/api/alerts", alertRoutes);
 app.use("/api/chat", chatRoutes);
@@ -72,6 +83,7 @@ app.use("/api/presentation", presentationRoutes);
 app.use("/api/auto-ppt", autoPptRoutes);
 app.use("/api/simple-auto-ppt", simpleAutoPptRoutes);
 app.use("/api/humanizer", humanizerRoutes);
+app.use("/api/simple-humanizer", simpleHumanizerRoutes);
 app.use("/api/citations", citationRoutes);
 app.use("/api/rmri", rmriRoutes);
 
@@ -81,6 +93,8 @@ app.use("/api", notesRoutes);
 app.use("/api", analyticsRoutes);
 app.use("/api", documentsRoutes);
 app.use("/api/collab-docs", collaborativeDocsRoutes);
+app.use("/api", pinnedPapersRoutes);
+app.use("/api", chartsRoutes);
 
 // Swagger setup
 const swaggerSpec = swaggerJsdoc({

@@ -1,5 +1,5 @@
 const express = require("express");
-const { indexItems, queryItems, getStatus } = require("../controllers/semanticController");
+const { indexItems, queryItems, getStatus, clearIndex, getIndexedPapers, logQuery } = require("../controllers/semanticController");
 const { asyncHandler, badRequest } = require("../utils/errorHandler");
 const { store } = require("../services/vectorStoreService");
 const { embedText } = require("../services/embeddingsService");
@@ -27,6 +27,27 @@ router.post("/query", queryItems);
  * @access  Public
  */
 router.get("/status", getStatus);
+
+/**
+ * @route   POST /api/semantic/clear
+ * @desc    Clear all indexed data for a namespace
+ * @access  Public
+ */
+router.post("/clear", clearIndex);
+
+/**
+ * @route   GET /api/semantic/indexed
+ * @desc    Get all indexed papers for a namespace
+ * @access  Public
+ */
+router.get("/indexed", getIndexedPapers);
+
+/**
+ * @route   POST /api/semantic/log-query
+ * @desc    Log a search query to database
+ * @access  Public
+ */
+router.post("/log-query", logQuery);
 
 /**
  * @route   POST /api/semantic/qa

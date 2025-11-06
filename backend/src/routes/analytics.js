@@ -22,7 +22,7 @@ router.get('/workspaces/:workspaceId/papers', requireAuth, async (req, res) => {
 
     // Verify access
     const { data: membership } = await supabase
-      .from('workspace_users')
+      .from('workspace_collaborators')
       .select('role')
       .eq('workspace_id', workspaceId)
       .eq('user_id', userId)
@@ -80,7 +80,7 @@ router.post('/workspaces/:workspaceId/papers', requireAuth, async (req, res) => 
 
     // Verify access
     const { data: membership } = await supabase
-      .from('workspace_users')
+      .from('workspace_collaborators')
       .select('role')
       .eq('workspace_id', workspaceId)
       .eq('user_id', userId)
@@ -166,7 +166,7 @@ router.get('/workspaces/:workspaceId/analytics/citation-trends', requireAuth, as
 
     // Verify access
     const { data: membership } = await supabase
-      .from('workspace_users')
+      .from('workspace_collaborators')
       .select('role')
       .eq('workspace_id', workspaceId)
       .eq('user_id', userId)
@@ -230,7 +230,7 @@ router.get('/workspaces/:workspaceId/analytics/keyword-network', requireAuth, as
 
     // Verify access
     const { data: membership } = await supabase
-      .from('workspace_users')
+      .from('workspace_collaborators')
       .select('role')
       .eq('workspace_id', workspaceId)
       .eq('user_id', userId)
@@ -286,7 +286,7 @@ router.get('/workspaces/:workspaceId/analytics/paper-comparison', requireAuth, a
 
     // Verify access
     const { data: membership } = await supabase
-      .from('workspace_users')
+      .from('workspace_collaborators')
       .select('role')
       .eq('workspace_id', workspaceId)
       .eq('user_id', userId)
@@ -343,7 +343,7 @@ router.post('/workspaces/:workspaceId/analytics/charts', requireAuth, async (req
 
     // Verify access
     const { data: membership } = await supabase
-      .from('workspace_users')
+      .from('workspace_collaborators')
       .select('role')
       .eq('workspace_id', workspaceId)
       .eq('user_id', userId)

@@ -25,20 +25,32 @@ const Humanizer: React.FC<HumanizerProps> = ({ workspaceId }) => {
     try {
       console.log('🧠 Starting text humanization process...');
       
-      // Call HuggingFace API for text humanization
-      const response = await fetch('/api/humanizer/humanize', {
+      // Get authentication token
+      const token = localStorage.getItem('authToken');
+      if (!token) {
+        throw new Error('Authentication required. Please log in.');
+      }
+      
+      // Call Simple Humanizer API (direct Cerebras)
+      const response = await fetch('/api/simple-humanizer/humanize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          text: inputText,
-          workspace_id: workspaceId
+          text: inputText
         })
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        if (response.status === 401) {
+          throw new Error('Authentication failed. Please log in again.');
+        } else if (response.status === 429) {
+          throw new Error('Rate limit exceeded. Please wait a moment and try again.');
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
       }
 
       const data = await response.json();
@@ -46,20 +58,24 @@ const Humanizer: React.FC<HumanizerProps> = ({ workspaceId }) => {
       console.log('✅ Text humanization completed:', {
         originalLength: inputText.length,
         humanizedLength: data.humanized_text?.length || 0,
-        detectionScore: data.ai_detection_score
+        provider: data.provider,
+        model: data.model,
+        latency: data.latency_ms
       });
 
       setHumanizedText(data.humanized_text || '');
-      setDetectionScore(data.ai_detection_score || null);
+      setDetectionScore(null); // Simple humanizer doesn't provide detection score
       
       toast.dismiss(loadingToast);
-      toast.success('🎉 Text humanized successfully!');
+      toast.success(`🎉 Humanized via ${data.provider} (${data.model}) in ${data.latency_ms}ms!`);
 
     } catch (error: any) {
       console.error('❌ Error humanizing text:', error);
       toast.dismiss(loadingToast);
       
-      if (error.message?.includes('429')) {
+      if (error.message?.includes('Authentication failed') || error.message?.includes('Authentication required')) {
+        toast.error('🔐 Authentication required. Please log in again.');
+      } else if (error.message?.includes('429') || error.message?.includes('Rate limit')) {
         toast.error('⏳ API rate limit reached. Please wait a moment and try again.');
       } else if (error.message?.includes('network') || error.message?.includes('fetch')) {
         toast.error('🌐 Network error. Please check your connection.');

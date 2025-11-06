@@ -52,6 +52,12 @@ const RMRIResults = ({ runId }) => {
           }
         );
 
+        console.log('📊 RMRI Results Response:', response.data);
+        console.log('📊 Results Data:', response.data.data);
+        console.log('📊 First Result:', response.data.data?.results?.[0]);
+        console.log('📊 First Result Data:', response.data.data?.results?.[0]?.data);
+        console.log('📊 Ranked Gaps:', response.data.data?.results?.[0]?.data?.rankedGaps);
+
         setResults(response.data.data);
         setLoading(false);
       } catch (err) {
@@ -78,7 +84,7 @@ const RMRIResults = ({ runId }) => {
   };
 
   const generateCSV = (data) => {
-    const gaps = data.results[0]?.content?.rankedGaps || [];
+    const gaps = data.results[0]?.data?.rankedGaps || [];
     const headers = ['Rank', 'Gap', 'Theme', 'Total Score', 'Importance', 'Novelty', 'Feasibility', 'Impact', 'Confidence'];
     
     const rows = gaps.map(gap => [
@@ -98,9 +104,9 @@ const RMRIResults = ({ runId }) => {
 
   // Sort and filter
   const getSortedGaps = () => {
-    if (!results?.results?.[0]?.content?.rankedGaps) return [];
+    if (!results?.results?.[0]?.data?.rankedGaps) return [];
 
-    let gaps = [...results.results[0].content.rankedGaps];
+    let gaps = [...results.results[0].data.rankedGaps];
 
     // Filter by theme
     if (filterTheme !== 'all') {
@@ -135,7 +141,7 @@ const RMRIResults = ({ runId }) => {
   };
 
   const sortedGaps = getSortedGaps();
-  const uniqueThemes = [...new Set(results?.results?.[0]?.content?.rankedGaps?.map(g => g.theme) || [])];
+  const uniqueThemes = [...new Set(results?.results?.[0]?.data?.rankedGaps?.map(g => g.theme) || [])];
 
   // Get confidence badge
   const getConfidenceBadge = (confidence) => {
@@ -431,21 +437,21 @@ const RMRIResults = ({ runId }) => {
           <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg p-6 text-white">
             <p className="text-sm opacity-90 mb-1">Total Research Gaps</p>
             <p className="text-4xl font-bold">
-              {results.results[0].content.rankedGaps?.length || 0}
+              {results.results[0].data.rankedGaps?.length || 0}
             </p>
           </div>
 
           <div className="bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg p-6 text-white">
             <p className="text-sm opacity-90 mb-1">Cross-Domain Patterns</p>
             <p className="text-4xl font-bold">
-              {results.results[0].content.crossDomainPatterns?.length || 0}
+              {results.results[0].data.crossDomainPatterns?.length || 0}
             </p>
           </div>
 
           <div className="bg-gradient-to-br from-pink-500 to-pink-600 rounded-lg p-6 text-white">
             <p className="text-sm opacity-90 mb-1">Research Frontiers</p>
             <p className="text-4xl font-bold">
-              {results.results[0].content.researchFrontiers?.length || 0}
+              {results.results[0].data.researchFrontiers?.length || 0}
             </p>
           </div>
         </motion.div>

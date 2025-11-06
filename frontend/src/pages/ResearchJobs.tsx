@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { HiPlay, HiDownload, HiEye, HiClock, HiCheckCircle, HiXCircle, HiRefresh, HiBookmark } from 'react-icons/hi'
+import { HiPlay, HiDownload, HiEye, HiClock, HiCheckCircle, HiXCircle, HiRefresh, HiBookmark, HiCheck } from 'react-icons/hi'
 import { useTheme } from '../contexts/ThemeContext'
 import { usePaperStorage } from '../contexts/PaperStorageContext'
 import { apiClient } from '../lib/apiClient'
@@ -15,6 +15,12 @@ type Job = {
   query?: string
 }
 
+type Workspace = {
+  id: string
+  name: string
+  description?: string
+}
+
 export default function ResearchJobs() {
   const { theme } = useTheme()
   const { addPaper, addSearchResult, papers } = usePaperStorage()
@@ -22,6 +28,93 @@ export default function ResearchJobs() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [activeResult, setActiveResult] = useState<any | null>(null)
   const [loading, setLoading] = useState(false)
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([])
+  const [selectedWorkspace, setSelectedWorkspace] = useState<string | null>(null)
+  const [pinningPapers, setPinningPapers] = useState<Set<string>>(new Set())
+  const [pinnedPapers, setPinnedPapers] = useState<Set<string>>(new Set())
+  const [showWorkspaceSelector, setShowWorkspaceSelector] = useState(false)
+
+  // Load workspaces on mount
+  useEffect(() => {
+    loadWorkspaces()
+  }, [])
+
+  async function loadWorkspaces() {
+    try {
+      const token = localStorage.getItem('authToken')
+      if (!token) return
+
+      const response = await fetch('/api/workspaces', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        setWorkspaces(data.workspaces || [])
+        // Auto-select first workspace if available
+        if (data.workspaces && data.workspaces.length > 0) {
+          setSelectedWorkspace(data.workspaces[0].id)
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load workspaces:', error)
+    }
+  }
+
+  async function pinPaperToWorkspace(paper: any, workspaceId: string) {
+    const paperId = paper.id || paper.paperId || paper.title
+    setPinningPapers(prev => new Set(prev).add(paperId))
+
+    try {
+      const token = localStorage.getItem('authToken')
+      if (!token) {
+        toast.error('Please log in to pin papers')
+        return
+      }
+
+      const response = await fetch(`/api/workspaces/${workspaceId}/papers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          paper_id: paper.id || paper.paperId || `paper_${Date.now()}`,
+          title: paper.title || 'Untitled',
+          authors: Array.isArray(paper.authors) ? paper.authors : 
+                   (paper.authors?.split(', ') || ['Unknown Author']),
+          abstract: paper.abstract || '',
+          publication_year: paper.year || null,
+          journal: paper.publication || paper.venue || '',
+          citation_count: paper.citationCount || 0,
+          keywords: paper.keywords || [],
+          pdf_url: paper.pdfUrl || '',
+          paper_url: paper.url || '',
+          notes: '',
+          tags: []
+        })
+      })
+
+      if (response.ok) {
+        setPinnedPapers(prev => new Set(prev).add(paperId))
+        toast.success(`Pinned to ${workspaces.find(w => w.id === workspaceId)?.name || 'workspace'}!`)
+      } else {
+        const error = await response.json()
+        toast.error(error.message || 'Failed to pin paper')
+      }
+    } catch (error) {
+      console.error('Pin error:', error)
+      toast.error('Failed to pin paper')
+    } finally {
+      setPinningPapers(prev => {
+        const next = new Set(prev)
+        next.delete(paperId)
+        return next
+      })
+    }
+  }
 
   async function onStart() {
     if (!query.trim()) {
@@ -205,6 +298,30 @@ export default function ResearchJobs() {
             borderColor: theme.colors.border
           }}
         >
+          {/* Workspace Selector */}
+          {workspaces.length > 0 && (
+            <div className="mb-4">
+              <label className="block text-sm font-medium mb-2" style={{ color: theme.colors.textSecondary }}>
+                Pin papers to workspace:
+              </label>
+              <select
+                value={selectedWorkspace || ''}
+                onChange={(e) => setSelectedWorkspace(e.target.value)}
+                className="w-full px-4 py-2 rounded-lg border focus:outline-none focus:ring-2"
+                style={{
+                  backgroundColor: theme.colors.background,
+                  borderColor: theme.colors.border,
+                  color: theme.colors.textPrimary
+                }}
+              >
+                {workspaces.map(workspace => (
+                  <option key={workspace.id} value={workspace.id}>
+                    {workspace.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <h2 className="text-xl font-semibold mb-4 flex items-center gap-2" style={{ color: theme.colors.textPrimary }}>
             <HiPlay className="h-5 w-5" style={{ color: theme.colors.accent }} />
             Start New Research Job
@@ -528,6 +645,41 @@ export default function ResearchJobs() {
                                   {paper.authors || "Unknown Authors"} · {paper.year || "Unknown Year"} · {paper.publication || "Unknown Publication"} · Citations: {paper.citationCount || 0}
                                 </p>
                                 <div className="flex flex-wrap gap-2">
+                                  {/* Pin to Workspace Button */}
+                                  {selectedWorkspace && (
+                                    <motion.button
+                                      onClick={() => pinPaperToWorkspace(paper, selectedWorkspace)}
+                                      disabled={pinningPapers.has(paper.id || paper.title) || pinnedPapers.has(paper.id || paper.title)}
+                                      className="flex items-center gap-1 text-xs px-2 py-1 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                      style={{
+                                        backgroundColor: pinnedPapers.has(paper.id || paper.title) 
+                                          ? `${theme.colors.success}20` 
+                                          : `${theme.colors.accent}20`,
+                                        color: pinnedPapers.has(paper.id || paper.title) 
+                                          ? theme.colors.success 
+                                          : theme.colors.accent
+                                      }}
+                                      whileHover={{ scale: 1.05 }}
+                                      whileTap={{ scale: 0.95 }}
+                                    >
+                                      {pinningPapers.has(paper.id || paper.title) ? (
+                                        <>
+                                          <HiRefresh className="h-3 w-3 animate-spin" />
+                                          Pinning...
+                                        </>
+                                      ) : pinnedPapers.has(paper.id || paper.title) ? (
+                                        <>
+                                          <HiCheck className="h-3 w-3" />
+                                          Pinned
+                                        </>
+                                      ) : (
+                                        <>
+                                          <HiBookmark className="h-3 w-3" />
+                                          Pin to Workspace
+                                        </>
+                                      )}
+                                    </motion.button>
+                                  )}
                                   {paper.url && (
                                     <a 
                                       className="text-xs px-2 py-1 rounded-full transition-colors"

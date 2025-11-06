@@ -76,6 +76,8 @@ interface ChartContainerProps {
   icon: LucideIcon;
   children: React.ReactNode;
   onExport: () => void;
+  onGenerate?: () => void;
+  chartType?: string;
 }
 
 interface FiltersPanelProps {
@@ -88,6 +90,7 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
   const [keywordNetwork, setKeywordNetwork] = useState<{ nodes: KeywordNode[], links: KeywordLink[] }>({ nodes: [], links: [] });
   const [comparisonData, setComparisonData] = useState<ComparisonData[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [chartJobs, setChartJobs] = useState<any[]>([]);
   const [filters, setFilters] = useState<Filters>({
     startYear: '',
     endYear: '',
@@ -97,7 +100,122 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
 
   useEffect(() => {
     loadAnalyticsData();
+    loadExistingCharts();
   }, [workspaceId, filters]);
+
+  const loadExistingCharts = async () => {
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(
+        `/api/workspaces/${workspaceId}/charts`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        }
+      );
+
+      const data = await response.json();
+      if (data.success) {
+        setChartJobs(data.data);
+      }
+    } catch (error) {
+      console.error('Error loading existing charts:', error);
+    }
+  };
+
+  const generateChart = async (chartType: 'citation_trend' | 'keyword_network' | 'venue_distribution', params = {}) => {
+    try {
+      const token = localStorage.getItem('authToken');
+      
+      console.log(`🎨 Generating ${chartType} chart...`);
+      
+      const response = await fetch(
+        `/api/workspaces/${workspaceId}/charts`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            type: chartType,
+            params: {
+              ...filters,
+              ...params
+            }
+          })
+        }
+      );
+
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log(`✅ Chart generation job queued: ${data.job_id}`);
+        
+        // Add to chart jobs for tracking
+        setChartJobs(prev => [...prev, {
+          id: data.job_id,
+          type: chartType,
+          status: 'queued',
+          created_at: new Date().toISOString()
+        }]);
+
+        // Poll for completion
+        pollJobStatus(data.job_id, chartType);
+        
+        return data.job_id;
+      } else {
+        throw new Error(data.message || 'Failed to generate chart');
+      }
+    } catch (error) {
+      console.error(`❌ Error generating ${chartType} chart:`, error);
+      throw error;
+    }
+  };
+
+  const pollJobStatus = async (jobId: string, chartType: string) => {
+    const maxAttempts = 30; // 30 attempts = 1 minute
+    let attempts = 0;
+
+    const poll = async () => {
+      try {
+        const token = localStorage.getItem('authToken');
+        const response = await fetch(
+          `/api/jobs/${jobId}/status?type=chart`,
+          {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          }
+        );
+
+        const data = await response.json();
+        
+        if (data.success) {
+          if (data.status === 'completed') {
+            console.log(`✅ Chart ${chartType} completed!`);
+            loadExistingCharts(); // Refresh chart list
+            return;
+          } else if (data.status === 'failed') {
+            console.error(`❌ Chart ${chartType} failed:`, data.error);
+            return;
+          }
+        }
+
+        attempts++;
+        if (attempts < maxAttempts) {
+          setTimeout(poll, 2000); // Poll every 2 seconds
+        } else {
+          console.warn(`⏱️ Chart ${chartType} polling timeout`);
+        }
+      } catch (error) {
+        console.error('Error polling job status:', error);
+      }
+    };
+
+    poll();
+  };
 
   const loadAnalyticsData = async () => {
     setLoading(true);
@@ -158,7 +276,7 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
       if (data.success) {
         setKeywordNetwork({
           nodes: data.data.nodes,
-          links: data.data.edges.map(edge => ({
+          links: data.data.edges.map((edge: any) => ({
             source: edge.source,
             target: edge.target,
             value: edge.weight
@@ -190,10 +308,11 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
     }
   };
 
-  const exportChart = async (chartType, format = 'png') => {
+  const exportChart = async (chartType: string, format = 'png') => {
     try {
-      // Implementation for chart export
-      console.log(`Exporting ${chartType} as ${format}`);
+      // Generate chart via backend API
+      const jobId = await generateChart(chartType as any, { format });
+      console.log(`Chart ${chartType} export started: ${jobId}`);
     } catch (error) {
       console.error('Error exporting chart:', error);
     }
@@ -208,15 +327,65 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
         <h2 className="text-2xl font-bold text-gray-900">Visual Analytics</h2>
         <div className="flex items-center space-x-4">
           <FiltersPanel filters={filters} onFiltersChange={setFilters} />
+          
+          {/* Chart Generation Buttons */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => generateChart('citation_trend')}
+              className="flex items-center space-x-2 px-3 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              <TrendingUp className="h-4 w-4" />
+              <span>Citation Trend</span>
+            </button>
+            
+            <button
+              onClick={() => generateChart('keyword_network')}
+              className="flex items-center space-x-2 px-3 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700"
+            >
+              <Network className="h-4 w-4" />
+              <span>Keyword Network</span>
+            </button>
+            
+            <button
+              onClick={() => generateChart('venue_distribution')}
+              className="flex items-center space-x-2 px-3 py-2 text-sm bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+            >
+              <PieIcon className="h-4 w-4" />
+              <span>Venue Distribution</span>
+            </button>
+          </div>
+          
           <motion.button
             className="p-2 text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg"
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
+            onClick={loadExistingCharts}
           >
             <Settings className="h-4 w-4" />
           </motion.button>
         </div>
       </div>
+
+      {/* Chart Jobs Status */}
+      {chartJobs.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-blue-900 mb-2">Chart Generation Status</h3>
+          <div className="space-y-2">
+            {chartJobs.map((job) => (
+              <div key={job.id} className="flex items-center justify-between text-sm">
+                <span className="text-blue-700">{job.type.replace('_', ' ').toUpperCase()}</span>
+                <span className={`px-2 py-1 rounded text-xs ${
+                  job.status === 'completed' ? 'bg-green-100 text-green-800' :
+                  job.status === 'failed' ? 'bg-red-100 text-red-800' :
+                  'bg-yellow-100 text-yellow-800'
+                }`}>
+                  {job.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {loading && (
         <div className="flex items-center justify-center py-12">
@@ -228,7 +397,9 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
       <ChartContainer
         title="Citation Trends Over Time"
         icon={TrendingUp}
-        onExport={() => exportChart('citation-trends')}
+        onExport={() => exportChart('citation_trend')}
+        onGenerate={() => generateChart('citation_trend')}
+        chartType="citation_trend"
       >
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={citationTrends}>
@@ -287,7 +458,9 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
       <ChartContainer
         title="Keyword Co-occurrence Network"
         icon={Network}
-        onExport={() => exportChart('keyword-network')}
+        onExport={() => exportChart('keyword_network')}
+        onGenerate={() => generateChart('keyword_network')}
+        chartType="keyword_network"
       >
         <div className="h-96 border border-gray-200 rounded-lg">
           {keywordNetwork.nodes.length > 0 ? (
@@ -357,7 +530,7 @@ const VisualAnalytics: React.FC<VisualAnalyticsProps> = ({ workspaceId, papers =
 };
 
 // Chart Container Component
-const ChartContainer: React.FC<ChartContainerProps> = ({ title, icon: Icon, children, onExport }) => (
+const ChartContainer: React.FC<ChartContainerProps> = ({ title, icon: Icon, children, onExport, onGenerate, chartType }) => (
   <motion.div
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
@@ -368,13 +541,24 @@ const ChartContainer: React.FC<ChartContainerProps> = ({ title, icon: Icon, chil
         <Icon className="h-5 w-5 text-gray-600" />
         <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
       </div>
-      <button
-        onClick={onExport}
-        className="flex items-center space-x-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50"
-      >
-        <Download className="h-4 w-4" />
-        <span>Export</span>
-      </button>
+      <div className="flex items-center space-x-2">
+        {onGenerate && (
+          <button
+            onClick={onGenerate}
+            className="flex items-center space-x-2 px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg"
+          >
+            <Icon className="h-4 w-4" />
+            <span>Generate</span>
+          </button>
+        )}
+        <button
+          onClick={onExport}
+          className="flex items-center space-x-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50"
+        >
+          <Download className="h-4 w-4" />
+          <span>Export</span>
+        </button>
+      </div>
     </div>
     {children}
   </motion.div>

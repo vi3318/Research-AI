@@ -8,6 +8,8 @@ const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 const contextStorage = require('../services/contextStorage');
 const { orchestrator } = require('../workers/orchestrator');
+const pdfProcessor = require('../services/pdfProcessorService');
+const axios = require('axios');
 const debug = require('debug')('researchai:rmri');
 
 // Initialize Supabase client
@@ -61,7 +63,7 @@ const validateAuth = async (req, res, next) => {
  */
 router.post('/start', validateAuth, async (req, res) => {
   try {
-    const { query, config = {} } = req.body;
+    const { query, config = {}, papers, llmClient = 'cerebras' } = req.body;
     const userId = req.user.id;
 
     // Validate input
@@ -73,27 +75,30 @@ router.post('/start', validateAuth, async (req, res) => {
     }
 
     debug(`🚀 Starting RMRI run for user ${userId}: "${query}"`);
+    
+    // Extract workspace_id from config - REQUIRED field
+    const workspaceId = config.workspace_id || config.workspaceId;
+    
+    if (!workspaceId) {
+      return res.status(400).json({
+        success: false,
+        error: 'workspace_id is required in config'
+      });
+    }
 
     // Create RMRI run record
     const { data: run, error: runError } = await supabase
       .from('rmri_runs')
       .insert({
+        workspace_id: workspaceId,
         user_id: userId,
         query: query.trim(),
-        status: 'initializing',
-        config: {
-          maxDepth: config.maxDepth || 3,
-          maxAgents: config.maxAgents || 20,
-          timeout: config.timeout || 300000, // 5 minutes default
-          confidenceThreshold: config.confidenceThreshold || 0.7,
-          enableCritic: config.enableCritic !== false,
-          ...config
-        },
-        metadata: {
-          userAgent: req.headers['user-agent'],
-          ipAddress: req.ip,
-          startedBy: req.user.email
-        }
+        max_iterations: config.maxDepth || 3,
+        convergence_threshold: config.convergenceThreshold || 0.7,
+        selected_domains: config.domains || ['general'],
+        status: 'pending', // Always start as pending
+        current_iteration: 0,
+        progress_percentage: 0
       })
       .select()
       .single();
@@ -102,35 +107,55 @@ router.post('/start', validateAuth, async (req, res) => {
       throw new Error(`Failed to create run: ${runError.message}`);
     }
 
-    // Log initialization
-    await supabase
-      .from('rmri_logs')
-      .insert({
-        run_id: run.id,
-        log_level: 'info',
-        message: `RMRI run initialized with query: "${query}"`,
-        context_data: { config: run.config }
-      });
-
     // Initialize context storage bucket
     await contextStorage.initializeBucket();
 
     debug(`✅ RMRI run created: ${run.id}`);
 
-    // Return run details
+    // Return run details immediately
     res.status(201).json({
       success: true,
       data: {
         runId: run.id,
         query: run.query,
         status: run.status,
-        config: run.config,
-        startedAt: run.started_at
+        maxIterations: run.max_iterations,
+        convergenceThreshold: run.convergence_threshold,
+        startedAt: run.created_at
       }
     });
 
-    // Note: Actual agent execution will be triggered by a separate service/queue
-    // This endpoint only initializes the run and returns immediately
+    // If papers are provided in the /start request, begin processing immediately
+    // Otherwise, client will call /execute separately
+    if (papers && Array.isArray(papers) && papers.length > 0) {
+      setImmediate(async () => {
+        try {
+          debug(`🔄 Auto-starting orchestration for run ${run.id} with ${papers.length} papers`);
+          
+          // Start orchestration asynchronously (non-blocking)
+          orchestrator.startOrchestration(run.id, papers, llmClient)
+            .then(() => {
+              debug(`✅ Orchestration completed for run ${run.id}`);
+            })
+            .catch(error => {
+              debug(`❌ Orchestration failed for run ${run.id}:`, error.message);
+              // Update run status to failed
+              supabase
+                .from('rmri_runs')
+                .update({ 
+                  status: 'failed',
+                  error_message: error.message
+                })
+                .eq('id', run.id)
+                .then(() => debug(`Updated run ${run.id} status to failed`));
+            });
+        } catch (bgError) {
+          debug(`❌ Background processing error for run ${run.id}:`, bgError.message);
+        }
+      });
+    } else {
+      debug(`⏸️ Run ${run.id} created, waiting for /execute call with papers`);
+    }
 
   } catch (error) {
     debug('❌ Start RMRI error:', error.message);
@@ -214,7 +239,7 @@ router.get('/:id/status', validateAuth, async (req, res) => {
     // Get agent statistics
     const { data: agents, error: agentsError } = await supabase
       .from('rmri_agents')
-      .select('id, agent_type, status, depth_level, execution_time_ms')
+      .select('id, agent_type, status, iteration_number, processing_time')
       .eq('run_id', runId);
 
     if (agentsError) {
@@ -225,10 +250,9 @@ router.get('/:id/status', validateAuth, async (req, res) => {
     const agentStats = {
       total: agents?.length || 0,
       pending: agents?.filter(a => a.status === 'pending').length || 0,
-      active: agents?.filter(a => a.status === 'active').length || 0,
+      running: agents?.filter(a => a.status === 'running').length || 0,
       completed: agents?.filter(a => a.status === 'completed').length || 0,
       failed: agents?.filter(a => a.status === 'failed').length || 0,
-      skipped: agents?.filter(a => a.status === 'skipped').length || 0,
       byType: {}
     };
 
@@ -238,13 +262,13 @@ router.get('/:id/status', validateAuth, async (req, res) => {
         agentStats.byType[agent.agent_type] = {
           total: 0,
           completed: 0,
-          active: 0,
+          running: 0,
           failed: 0
         };
       }
       agentStats.byType[agent.agent_type].total++;
       if (agent.status === 'completed') agentStats.byType[agent.agent_type].completed++;
-      if (agent.status === 'active') agentStats.byType[agent.agent_type].active++;
+      if (agent.status === 'running') agentStats.byType[agent.agent_type].running++;
       if (agent.status === 'failed') agentStats.byType[agent.agent_type].failed++;
     });
 
@@ -256,15 +280,15 @@ router.get('/:id/status', validateAuth, async (req, res) => {
     // Get latest logs (last 10)
     const { data: recentLogs } = await supabase
       .from('rmri_logs')
-      .select('log_level, message, timestamp')
+      .select('level, message, created_at')
       .eq('run_id', runId)
-      .order('timestamp', { ascending: false })
+      .order('created_at', { ascending: false })
       .limit(10);
 
     // Calculate elapsed time
     const elapsedMs = run.completed_at 
-      ? new Date(run.completed_at) - new Date(run.started_at)
-      : Date.now() - new Date(run.started_at);
+      ? new Date(run.completed_at) - new Date(run.created_at)
+      : Date.now() - new Date(run.created_at);
 
     res.json({
       success: true,
@@ -273,13 +297,14 @@ router.get('/:id/status', validateAuth, async (req, res) => {
         query: run.query,
         status: run.status,
         progress,
+        currentIteration: run.current_iteration,
+        maxIterations: run.max_iterations,
         agents: agentStats,
         elapsedMs,
-        startedAt: run.started_at,
+        createdAt: run.created_at,
         completedAt: run.completed_at,
         errorMessage: run.error_message,
-        recentLogs: recentLogs || [],
-        config: run.config
+        logs: recentLogs || []
       }
     });
 
@@ -324,14 +349,11 @@ router.get('/:id/results', validateAuth, async (req, res) => {
       .from('rmri_results')
       .select(`
         id,
-        agent_id,
+        run_id,
+        iteration_number,
         result_type,
-        content,
-        confidence_score,
-        sources,
-        is_final,
-        created_at,
-        rmri_agents(agent_name, agent_type)
+        data,
+        created_at
       `)
       .eq('run_id', runId);
 
@@ -339,8 +361,19 @@ router.get('/:id/results', validateAuth, async (req, res) => {
       query = query.eq('result_type', type);
     }
 
+    // For finalOnly, get results from the last iteration
     if (finalOnly === 'true') {
-      query = query.eq('is_final', true);
+      const { data: lastIteration } = await supabase
+        .from('rmri_iterations')
+        .select('iteration_number')
+        .eq('run_id', runId)
+        .order('iteration_number', { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (lastIteration) {
+        query = query.eq('iteration_number', lastIteration.iteration_number);
+      }
     }
 
     query = query.order('created_at', { ascending: false });
@@ -419,10 +452,9 @@ router.post('/writecontext', validateAuth, async (req, res) => {
       .from('rmri_logs')
       .insert({
         run_id: runId,
-        agent_id: agentId,
-        log_level: 'info',
+        level: 'info',
         message: `Context written: ${contextKey} (${mode})`,
-        context_data: { 
+        metadata: { 
           contextKey, 
           mode, 
           sizeBytes: result.sizeBytes 
@@ -641,11 +673,11 @@ router.get('/:id/logs', validateAuth, async (req, res) => {
       .eq('run_id', runId);
 
     if (level) {
-      query = query.eq('log_level', level);
+      query = query.eq('level', level);
     }
 
     query = query
-      .order('timestamp', { ascending: false })
+      .order('created_at', { ascending: false })
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     const { data: logs, error: logsError } = await query;
@@ -680,7 +712,7 @@ router.post('/:id/execute', validateAuth, async (req, res) => {
   try {
     const runId = req.params.id;
     const userId = req.user.id;
-    const { papers, llmClient = 'gemini' } = req.body;
+    const { papers, llmClient = 'cerebras' } = req.body;
 
     // Validate papers
     if (!papers || !Array.isArray(papers) || papers.length === 0) {
@@ -714,10 +746,80 @@ router.post('/:id/execute', validateAuth, async (req, res) => {
     }
 
     debug(`🚀 Executing RMRI orchestration for run ${runId} with ${papers.length} papers`);
+    console.log(`🚀 Executing RMRI orchestration for run ${runId} with ${papers.length} papers`);
 
-    // Start orchestration asynchronously
-    orchestrator.startOrchestration(runId, papers, llmClient)
+    // Process papers to extract PDF content
+    console.log('📄 Processing papers and extracting PDF content...');
+    const processedPapers = await Promise.all(papers.map(async (paper) => {
+      try {
+        let fullText = '';
+        let abstract = '';
+        
+        // If paper has a URL, try to fetch and extract PDF
+        if (paper.url) {
+          try {
+            console.log(`📥 Fetching PDF from: ${paper.url}`);
+            const response = await axios.get(paper.url, {
+              responseType: 'arraybuffer',
+              timeout: 30000,
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+              }
+            });
+            
+            const pdfBuffer = Buffer.from(response.data);
+            const extracted = await pdfProcessor.processPDFBuffer(pdfBuffer);
+            fullText = extracted.text || '';
+            console.log(`✅ Extracted ${fullText.length} characters from ${paper.title}`);
+          } catch (pdfError) {
+            console.warn(`⚠️  Could not extract PDF for ${paper.title}:`, pdfError.message);
+            fullText = `Title: ${paper.title}\n\n[PDF content extraction failed]`;
+          }
+        }
+        
+        return {
+          ...paper,
+          content: fullText,
+          fullText: fullText,
+          abstract: abstract || fullText.substring(0, 500), // First 500 chars as abstract fallback
+          fileName: paper.fileName || `paper_${Date.now()}.pdf`,
+          // Add missing properties with defaults
+          id: paper.id || `paper_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          authors: paper.authors || [],
+          year: paper.year || new Date().getFullYear(),
+          venue: paper.venue || 'Unknown',
+          citations: paper.citations || 0,
+          doi: paper.doi || null,
+          references: paper.references || []
+        };
+      } catch (error) {
+        console.error(`❌ Error processing paper ${paper.title}:`, error);
+        // Return paper with minimal content to avoid breaking the flow
+        return {
+          ...paper,
+          content: `Title: ${paper.title}\n\n[Processing failed]`,
+          fullText: `Title: ${paper.title}`,
+          abstract: '',
+          id: `paper_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          authors: [],
+          year: new Date().getFullYear(),
+          venue: 'Unknown',
+          citations: 0,
+          doi: null,
+          references: []
+        };
+      }
+    }));
+
+    console.log(`✅ Processed ${processedPapers.length} papers`);
+
+    // Start orchestration asynchronously with processed papers
+    orchestrator.startOrchestration(runId, processedPapers, llmClient)
+      .then(() => {
+        console.log(`✅ Orchestration completed successfully for run ${runId}`);
+      })
       .catch(error => {
+        console.error(`❌ Orchestration background error for run ${runId}:`, error);
         debug(`❌ Orchestration background error:`, error.message);
       });
 

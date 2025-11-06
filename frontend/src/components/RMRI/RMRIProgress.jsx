@@ -26,10 +26,9 @@ const AGENT_TYPES = {
 
 const STATUS_COLORS = {
   pending: 'gray',
-  active: 'blue',
+  running: 'blue',
   completed: 'green',
-  failed: 'red',
-  executing: 'indigo'
+  failed: 'red'
 };
 
 const RMRIProgress = ({ runId }) => {
@@ -99,25 +98,28 @@ const RMRIProgress = ({ runId }) => {
 
   if (!status) return null;
 
-  const { run, agents, progress, currentIteration, totalIterations } = status;
-
-  // Calculate agent statistics
+  // Backend sends: { agents: { total, pending, running, completed, failed, byType: { micro: {...}, meso: {...}, meta: {...} } } }
+  const agentsByType = status.agents?.byType || {};
+  
+  // Calculate agent statistics from backend data
   const agentStats = {
     micro: {
-      total: agents?.micro?.length || 0,
-      completed: agents?.micro?.filter(a => a.status === 'completed').length || 0,
-      active: agents?.micro?.filter(a => a.status === 'active').length || 0,
-      failed: agents?.micro?.filter(a => a.status === 'failed').length || 0
+      total: agentsByType.micro?.total || 0,
+      completed: agentsByType.micro?.completed || 0,
+      running: agentsByType.micro?.running || 0,
+      failed: agentsByType.micro?.failed || 0
     },
     meso: {
-      total: agents?.meso?.length || 0,
-      completed: agents?.meso?.filter(a => a.status === 'completed').length || 0,
-      active: agents?.meso?.filter(a => a.status === 'active').length || 0
+      total: agentsByType.meso?.total || 0,
+      completed: agentsByType.meso?.completed || 0,
+      running: agentsByType.meso?.running || 0,
+      failed: agentsByType.meso?.failed || 0
     },
     meta: {
-      total: agents?.meta?.length || 0,
-      completed: agents?.meta?.filter(a => a.status === 'completed').length || 0,
-      active: agents?.meta?.filter(a => a.status === 'active').length || 0
+      total: agentsByType.meta?.total || 0,
+      completed: agentsByType.meta?.completed || 0,
+      running: agentsByType.meta?.running || 0,
+      failed: agentsByType.meta?.failed || 0
     }
   };
 
@@ -131,13 +133,13 @@ const RMRIProgress = ({ runId }) => {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">RMRI Analysis Progress</h2>
-          <p className="text-gray-600 mt-1">{run?.query}</p>
+          <p className="text-gray-600 mt-1">{status.query}</p>
         </div>
         <motion.div
-          animate={run?.status === 'executing' ? { rotate: 360 } : {}}
+          animate={status.status === 'running' ? { rotate: 360 } : {}}
           transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
         >
-          <ArrowPathIcon className={`w-8 h-8 ${run?.status === 'executing' ? 'text-indigo-600' : 'text-gray-400'}`} />
+          <ArrowPathIcon className={`w-8 h-8 ${status.status === 'running' ? 'text-indigo-600' : 'text-gray-400'}`} />
         </motion.div>
       </div>
 
@@ -150,12 +152,12 @@ const RMRIProgress = ({ runId }) => {
         <div className="flex items-center justify-between mb-4">
           <div>
             <p className="text-sm opacity-90">Overall Progress</p>
-            <p className="text-3xl font-bold mt-1">{Math.round(progress || 0)}%</p>
+            <p className="text-3xl font-bold mt-1">{Math.round(status.progress || 0)}%</p>
           </div>
           <div className="text-right">
             <p className="text-sm opacity-90">Iteration</p>
             <p className="text-3xl font-bold mt-1">
-              {currentIteration || 0} / {totalIterations || 4}
+              {status.currentIteration || 0} / {status.maxIterations || 3}
             </p>
           </div>
         </div>
@@ -164,7 +166,7 @@ const RMRIProgress = ({ runId }) => {
         <div className="w-full bg-white/20 rounded-full h-3 overflow-hidden">
           <motion.div
             initial={{ width: 0 }}
-            animate={{ width: `${progress || 0}%` }}
+            animate={{ width: `${status.progress || 0}%` }}
             transition={{ duration: 0.5 }}
             className="h-full bg-white rounded-full"
           />
@@ -172,19 +174,19 @@ const RMRIProgress = ({ runId }) => {
 
         {/* Status Badge */}
         <div className="mt-4 flex items-center gap-2">
-          {run?.status === 'executing' && (
+          {status.status === 'running' && (
             <>
               <ClockIcon className="w-5 h-5" />
-              <span className="font-medium">Executing...</span>
+              <span className="font-medium">Running...</span>
             </>
           )}
-          {run?.status === 'completed' && (
+          {status.status === 'completed' && (
             <>
               <CheckCircleIcon className="w-5 h-5" />
               <span className="font-medium">Completed</span>
             </>
           )}
-          {run?.status === 'failed' && (
+          {status.status === 'failed' && (
             <>
               <ExclamationCircleIcon className="w-5 h-5" />
               <span className="font-medium">Failed</span>
@@ -279,14 +281,14 @@ const RMRIProgress = ({ runId }) => {
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <p className="text-sm text-gray-900">{log.message}</p>
-                    {log.metadata && (
+                    {log.metadata && Object.keys(log.metadata).length > 0 && (
                       <p className="text-xs text-gray-500 mt-1">
                         {JSON.stringify(log.metadata)}
                       </p>
                     )}
                   </div>
                   <span className="text-xs text-gray-400 ml-3">
-                    {new Date(log.timestamp).toLocaleTimeString()}
+                    {log.created_at ? new Date(log.created_at).toLocaleTimeString() : ''}
                   </span>
                 </div>
               </motion.div>
@@ -302,7 +304,7 @@ const RMRIProgress = ({ runId }) => {
       </motion.div>
 
       {/* Iteration Timeline */}
-      {currentIteration > 0 && (
+      {(status.currentIteration || 0) > 0 && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -312,11 +314,11 @@ const RMRIProgress = ({ runId }) => {
           <h3 className="font-semibold text-gray-900 mb-4">Iteration Timeline</h3>
           
           <div className="flex items-center gap-4">
-            {Array.from({ length: totalIterations }).map((_, idx) => {
+            {Array.from({ length: status.maxIterations || 3 }).map((_, idx) => {
               const iterNum = idx + 1;
-              const isComplete = iterNum < currentIteration;
-              const isCurrent = iterNum === currentIteration;
-              const isPending = iterNum > currentIteration;
+              const isComplete = iterNum < (status.currentIteration || 0);
+              const isCurrent = iterNum === (status.currentIteration || 0);
+              const isPending = iterNum > (status.currentIteration || 0);
 
               return (
                 <div key={iterNum} className="flex items-center flex-1">
@@ -334,7 +336,7 @@ const RMRIProgress = ({ runId }) => {
                   >
                     {isComplete ? '✓' : iterNum}
                   </motion.div>
-                  {idx < totalIterations - 1 && (
+                  {idx < (status.maxIterations || 3) - 1 && (
                     <div className={`flex-1 h-1 mx-2 ${
                       isComplete ? 'bg-green-500' : 'bg-gray-200'
                     }`} />
@@ -347,7 +349,7 @@ const RMRIProgress = ({ runId }) => {
       )}
 
       {/* Action Buttons */}
-      {run?.status === 'executing' && (
+      {status?.status === 'running' && (
         <motion.button
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}

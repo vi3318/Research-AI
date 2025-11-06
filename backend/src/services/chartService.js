@@ -1,18 +1,16 @@
 /**
  * Chart Generation Service
- * Server-side chart rendering for academic data visualization
+ * Server-side chart data preparation and export
  * 
  * Supported chart types:
  * - citation_trend: Papers published over time
  * - keyword_network: Co-occurrence network of keywords
- * - author_collaboration: Author collaboration network
  * - venue_distribution: Papers by venue/journal
  * 
- * Uses chartjs-node-canvas for rendering to PNG/SVG
+ * Uses frontend chart libraries for rendering, backend for data processing
  */
 
 const { createClient } = require('@supabase/supabase-js');
-const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
 const debug = require('debug')('researchai:charts');
 
 // Initialize Supabase client
@@ -23,16 +21,9 @@ const supabase = createClient(
 
 class ChartService {
   constructor() {
-    // Chart renderer configuration
+    // Chart configuration
     this.width = 800;
     this.height = 600;
-    this.backgroundColour = 'white';
-    
-    this.chartJSNodeCanvas = new ChartJSNodeCanvas({
-      width: this.width,
-      height: this.height,
-      backgroundColour: this.backgroundColour
-    });
   }
 
   /**
@@ -69,8 +60,8 @@ class ChartService {
     const years = Object.keys(yearCounts).sort();
     const counts = years.map(y => yearCounts[y]);
 
-    // Generate chart
-    const configuration = {
+    // Prepare chart configuration for frontend
+    const chartConfig = {
       type: 'line',
       data: {
         labels: years,
@@ -104,12 +95,10 @@ class ChartService {
         }
       }
     };
-
-    const imageBuffer = await this.chartJSNodeCanvas.renderToBuffer(configuration);
     
     return {
       type: 'citation_trend',
-      imageBuffer,
+      chartConfig,
       data: { years, counts },
       metadata: {
         total_papers: pins.length,
@@ -166,8 +155,8 @@ class ChartService {
       .slice(0, params.maxKeywords || 15)
       .map(([keyword, count]) => ({ keyword, count }));
 
-    // Create bar chart of keyword frequencies
-    const configuration = {
+    // Create bar chart configuration for keyword frequencies
+    const chartConfig = {
       type: 'bar',
       data: {
         labels: topKeywords.map(k => k.keyword),
@@ -202,8 +191,6 @@ class ChartService {
       }
     };
 
-    const imageBuffer = await this.chartJSNodeCanvas.renderToBuffer(configuration);
-
     // Build network data for frontend visualization
     const nodes = topKeywords.map((k, i) => ({
       id: i,
@@ -224,7 +211,7 @@ class ChartService {
 
     return {
       type: 'keyword_network',
-      imageBuffer,
+      chartConfig,
       data: {
         keywords: topKeywords,
         network: { nodes, edges }
@@ -267,7 +254,7 @@ class ChartService {
       .sort((a, b) => b[1] - a[1])
       .slice(0, params.maxVenues || 10);
 
-    const configuration = {
+    const chartConfig = {
       type: 'doughnut',
       data: {
         labels: topVenues.map(([venue]) => venue),
@@ -302,11 +289,9 @@ class ChartService {
       }
     };
 
-    const imageBuffer = await this.chartJSNodeCanvas.renderToBuffer(configuration);
-
     return {
       type: 'venue_distribution',
-      imageBuffer,
+      chartConfig,
       data: { venues: topVenues },
       metadata: {
         total_venues: Object.keys(venueCounts).length,
@@ -316,18 +301,28 @@ class ChartService {
   }
 
   /**
-   * Upload chart image to Supabase Storage
+   * Generate chart data URL from config
    */
-  async uploadChartImage(imageBuffer, workspaceId, chartType) {
-    const filename = `${workspaceId}/${chartType}_${Date.now()}.png`;
+  generateDataURL(chartConfig) {
+    // For now, return a simple data URL - frontend will handle rendering
+    const data = JSON.stringify(chartConfig);
+    return `data:application/json;base64,${Buffer.from(data).toString('base64')}`;
+  }
+
+  /**
+   * Upload chart data to Supabase Storage
+   */
+  async uploadChartData(chartConfig, workspaceId, chartType) {
+    const filename = `${workspaceId}/${chartType}_${Date.now()}.json`;
     const bucket = 'chart-exports';
+    const data = JSON.stringify(chartConfig, null, 2);
 
     try {
       // Upload to Supabase Storage
-      const { data, error } = await supabase.storage
+      const { data: uploadData, error } = await supabase.storage
         .from(bucket)
-        .upload(filename, imageBuffer, {
-          contentType: 'image/png',
+        .upload(filename, data, {
+          contentType: 'application/json',
           upsert: true
         });
 
@@ -340,16 +335,16 @@ class ChartService {
 
       return publicUrl;
     } catch (error) {
-      debug(`Failed to upload chart: ${error.message}`);
+      debug(`Failed to upload chart data: ${error.message}`);
       // Return data URL as fallback
-      return `data:image/png;base64,${imageBuffer.toString('base64')}`;
+      return this.generateDataURL(chartConfig);
     }
   }
 
   /**
    * Save chart metadata to database
    */
-  async saveChartExport(workspaceId, userId, chartType, imageUrl, data, params) {
+  async saveChartExport(workspaceId, userId, chartType, dataUrl, data, params) {
     try {
       const { data: chartExport, error } = await supabase
         .from('chart_exports')
@@ -357,9 +352,9 @@ class ChartService {
           workspace_id: workspaceId,
           user_id: userId,
           type: chartType,
-          title: params.title || `${chartType} - ${new Date().toLocaleDateString()}`,
+          title: params.title || `${chartType.replace('_', ' ')} - ${new Date().toLocaleDateString()}`,
           params: params,
-          image_url: imageUrl
+          image_url: dataUrl // Now stores JSON data URL instead of image
         })
         .select()
         .single();
@@ -397,9 +392,9 @@ class ChartService {
         throw new Error(`Unsupported chart type: ${chartType}`);
     }
 
-    // Upload image
-    const imageUrl = await this.uploadChartImage(
-      result.imageBuffer,
+    // Upload chart configuration
+    const dataUrl = await this.uploadChartData(
+      result.chartConfig,
       workspaceId,
       chartType
     );
@@ -409,7 +404,7 @@ class ChartService {
       workspaceId,
       userId,
       chartType,
-      imageUrl,
+      dataUrl,
       result.data,
       params
     );
@@ -419,7 +414,8 @@ class ChartService {
     return {
       chart_id: chartExport.id,
       type: chartType,
-      image_url: imageUrl,
+      chart_config: result.chartConfig,
+      data_url: dataUrl,
       data: result.data,
       metadata: result.metadata,
       latency_ms: latency

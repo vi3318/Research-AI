@@ -9,7 +9,7 @@ import { ChatProvider } from '../contexts/ChatContext'
 import UserMenu from '../components/UserMenu'
 import ProtectedRoute from '../components/ProtectedRoute'
 import ResearchJobs from './ResearchJobs'
-import Semantic from './Semantic'
+import SemanticSearch from './SemanticSearch' // New semantic search with vector DB
 import Literature from './Literature'
 import Chat from './Chat'
 import ChatNew from './ChatNew'
@@ -99,7 +99,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<ProtectedRoute><EnhancedChat /></ProtectedRoute>} />
           <Route path="/research" element={<ProtectedRoute><ResearchJobs /></ProtectedRoute>} />
-          <Route path="/semantic" element={<ProtectedRoute><Semantic /></ProtectedRoute>} />
+          <Route path="/semantic" element={<ProtectedRoute><SemanticSearch /></ProtectedRoute>} />
           <Route path="/presentation" element={<ProtectedRoute><Presentation /></ProtectedRoute>} />
           <Route path="/workspace" element={<ProtectedRoute><WorkspaceList /></ProtectedRoute>} />
           <Route path="/workspace/:workspaceId" element={<ProtectedRoute><WorkspacePage /></ProtectedRoute>} />

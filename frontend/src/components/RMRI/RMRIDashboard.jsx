@@ -234,7 +234,7 @@ const RMRIDashboard = () => {
             transition={{ duration: 0.2 }}
           >
             {activeTab === 'start' && (
-              <RMRIStartPanel onRunStarted={handleRunStarted} />
+              <RMRIStartPanel onRunCreated={handleRunStarted} />
             )}
             
             {activeTab === 'progress' && currentRunId && (
@@ -277,8 +277,8 @@ const RMRIDashboard = () => {
         </AnimatePresence>
       </div>
 
-      {/* Recent Runs Sidebar (Optional) */}
-      {runs.length > 0 && activeTab === 'start' && (
+      {/* Recent Runs Sidebar (Optional) - Only show completed/running runs */}
+      {runs.filter(r => r.status !== 'pending').length > 0 && activeTab === 'start' && (
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -286,7 +286,7 @@ const RMRIDashboard = () => {
         >
           <h3 className="font-semibold text-gray-900 mb-3">Recent Runs</h3>
           <div className="space-y-2">
-            {runs.slice(0, 5).map((run) => (
+            {runs.filter(r => r.status !== 'pending').slice(0, 5).map((run) => (
               <button
                 key={run.id}
                 onClick={() => {

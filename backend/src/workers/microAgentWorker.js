@@ -14,12 +14,16 @@ const Queue = require('bull');
 const { createClient } = require('@supabase/supabase-js');
 const contextStorage = require('../services/contextStorage');
 const debug = require('debug')('researchai:micro-agent');
+const LLMClients = require('../services/llmClients');
 
 // Initialize Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+// Initialize LLM Clients
+const llmClients = new LLMClients();
 
 // Create Bull Queue for micro agent jobs
 const microAgentQueue = new Queue('rmri-micro-agent', {
@@ -43,7 +47,7 @@ const microAgentQueue = new Queue('rmri-micro-agent', {
  * Micro Agent Job Processor
  * Analyzes individual papers and extracts structured insights
  */
-microAgentQueue.process(async (job, done) => {
+microAgentQueue.process(async (job) => {
   const { runId, agentId, paper, iteration, llmClient } = job.data;
   const startTime = Date.now();
 
@@ -56,7 +60,7 @@ microAgentQueue.process(async (job, done) => {
     );
 
     // Update agent status
-    await updateAgentStatus(agentId, 'active', { currentPaper: paper.title });
+    await updateAgentStatus(agentId, 'running', { currentPaper: paper.title });
 
     // Step 1: Extract paper structure
     const paperStructure = await extractPaperStructure(paper);
@@ -116,16 +120,9 @@ microAgentQueue.process(async (job, done) => {
     // Step 8: Store in results table
     await supabase.from('rmri_results').insert({
       run_id: runId,
-      agent_id: agentId,
-      result_type: 'analysis',
-      content: microOutput,
-      confidence_score: confidence,
-      sources: [{ 
-        title: paper.title, 
-        doi: paper.doi,
-        url: paper.url 
-      }],
-      is_final: false
+      iteration_number: iteration,
+      result_type: 'gaps',
+      data: microOutput
     });
 
     // Log completion
@@ -142,21 +139,35 @@ microAgentQueue.process(async (job, done) => {
 
     debug(`✅ Micro Agent completed in ${executionTime}ms`);
 
-    done(null, microOutput);
+    return microOutput;
 
   } catch (error) {
+    console.error(`❌ MICRO AGENT FULL ERROR for ${agentId}:`, {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      paper: paper?.title,
+      runId,
+      agentId
+    });
+    
     debug(`❌ Micro Agent error:`, error.message);
     
-    await logToDatabase(runId, agentId, 'error',
-      `Micro agent failed: ${error.message}`,
-      { error: error.stack }
-    );
+    try {
+      await logToDatabase(runId, agentId, 'error',
+        `Micro agent failed: ${error.message}`,
+        { error: error.stack, errorName: error.name }
+      );
 
-    await updateAgentStatus(agentId, 'failed', { 
-      error: error.message 
-    });
+      await updateAgentStatus(agentId, 'failed', { 
+        error: error.message,
+        errorStack: error.stack
+      });
+    } catch (logError) {
+      console.error('Failed to log error to database:', logError);
+    }
 
-    done(error);
+    throw error;
   }
 });
 
@@ -239,6 +250,7 @@ async function performDeepAnalysis(paper, structure, llmClient) {
 
 Title: ${paper.title}
 Abstract: ${paper.abstract || 'Not available'}
+Full Text: ${paper.fullText?.substring(0, 3000) || 'Not available'}
 
 Provide a structured analysis covering:
 1. Main research problem addressed
@@ -250,17 +262,44 @@ Provide a structured analysis covering:
 
 Be specific and cite evidence from the text where possible.`;
 
-  // This will use the LLM client (to be implemented)
-  const analysis = {
-    problem: extractProblemStatement(paper, structure),
-    novelty: extractNovelty(paper, structure),
-    approach: extractApproach(paper, structure),
-    findings: extractFindings(paper, structure),
-    limitations: extractStatedLimitations(paper, structure),
-    futureWork: extractFutureWork(paper, structure)
-  };
+  try {
+    // Use smart fallback: Gemini → Cerebras → Huggingface
+    const result = await llmClients.callWithFallback(prompt, {
+      agentType: 'micro',
+      preferredProvider: 'gemini',
+      maxTokens: 2000,
+      temperature: 0.3
+    });
 
-  return analysis;
+    // Parse LLM response into structured format
+    const analysis = {
+      problem: result.output,
+      novelty: extractNovelty(paper, structure),
+      approach: extractApproach(paper, structure),
+      findings: extractFindings(paper, structure),
+      limitations: extractStatedLimitations(paper, structure),
+      futureWork: extractFutureWork(paper, structure),
+      provider: result.provider,
+      model: result.model
+    };
+
+    return analysis;
+  } catch (error) {
+    console.error('LLM analysis failed, using fallback extraction:', error.message);
+    // Fallback to rule-based extraction
+    const analysis = {
+      problem: extractProblemStatement(paper, structure),
+      novelty: extractNovelty(paper, structure),
+      approach: extractApproach(paper, structure),
+      findings: extractFindings(paper, structure),
+      limitations: extractStatedLimitations(paper, structure),
+      futureWork: extractFutureWork(paper, structure),
+      provider: 'fallback-rules',
+      model: 'none'
+    };
+
+    return analysis;
+  }
 }
 
 /**
@@ -319,27 +358,276 @@ async function extractLimitations(paper, analysis, llmClient) {
  * Identify research gaps
  */
 async function identifyGaps(paper, analysis, llmClient) {
-  const gaps = [];
+  try {
+    // Sanitize paper content to avoid safety filters
+    const sanitizedAbstract = (paper.abstract || 'Not available').substring(0, 500);
+    const sanitizedTitle = (paper.title || 'Untitled').substring(0, 200);
+    
+    const prompt = `Extract research opportunities from this academic paper.
 
-  // From future work section
-  if (analysis.futureWork) {
+Title: ${sanitizedTitle}
+Abstract: ${sanitizedAbstract}
+
+Return a JSON array of 3-5 items. Each item format:
+{"description":"specific research opportunity","type":"methodological","priority":"high","rationale":"why important"}
+
+Types: stated_future_work, limitation_derived, methodological, theoretical, empirical
+Priorities: high, medium, low
+
+JSON:`;
+
+    // Use the global llmClients instance with smart fallback
+    console.log(`🤖 Calling LLM for gap extraction: ${paper.title}`);
+    const result = await llmClients.callWithFallback(prompt, {
+      preferredOrder: ['gemini', 'cerebras', 'huggingface'],
+      maxTokens: 3000,  // Increased from 1500 to allow complete JSON
+      temperature: 0.3,
+      jsonMode: true  // Force JSON output for Gemini
+    });
+    
+    console.log(`📦 LLM Result:`, {
+      provider: result?.provider,
+      hasOutput: !!result?.output,
+      outputLength: result?.output?.length || 0,
+      outputPreview: result?.output?.substring(0, 100),
+      finishReason: result?.metadata?.finishReason
+    });
+    
+    if (!result || !result.output) {
+      console.error(`❌ LLM returned null or empty:`, result);
+      throw new Error('LLM returned null or empty result');
+    }
+    
+    // Check if response was cut off due to max tokens
+    if (result.metadata?.finishReason === 'MAX_TOKENS') {
+      console.warn(`⚠️ Response may be incomplete (hit MAX_TOKENS limit)`);
+      // Try to fix incomplete JSON by adding closing brackets
+      let fixed = result.output.trim();
+      if (fixed.startsWith('[') && !fixed.endsWith(']')) {
+        // Count open braces to determine how many we need to close
+        const openBraces = (fixed.match(/{/g) || []).length;
+        const closeBraces = (fixed.match(/}/g) || []).length;
+        const bracesToAdd = openBraces - closeBraces;
+        
+        console.log(`🔧 Attempting to fix incomplete JSON (adding ${bracesToAdd} closing braces)`);
+        for (let i = 0; i < bracesToAdd; i++) {
+          fixed += '\n  }';
+        }
+        fixed += '\n]';
+        result.output = fixed;
+      }
+    }
+    
+    const response = result.output;
+    console.log(`🔍 LLM Response for "${paper.title}" (${response?.length || 0} chars):`, response?.substring(0, 200));
+    
+    // Parse LLM response
+    let parsedGaps = [];
+    try {
+      if (!response || response.trim().length === 0) {
+        throw new Error('Empty LLM response');
+      }
+      
+      // Remove markdown code blocks if present
+      let cleanResponse = response.trim();
+      if (cleanResponse.startsWith('```')) {
+        cleanResponse = cleanResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+      }
+      
+      // Try to parse JSON
+      parsedGaps = JSON.parse(cleanResponse);
+      
+      // Ensure it's an array
+      if (!Array.isArray(parsedGaps)) {
+        parsedGaps = [parsedGaps];
+      }
+      
+      // Filter out invalid gaps
+      parsedGaps = parsedGaps.filter(gap => gap && gap.description);
+      
+      if (parsedGaps.length === 0) {
+        throw new Error('No valid gaps in LLM response');
+      }
+      
+      // Add metadata
+      parsedGaps = parsedGaps.map(gap => ({
+        description: gap.description || 'No description provided',
+        type: gap.type || 'inferred',
+        priority: gap.priority || 'medium',
+        rationale: gap.rationale || 'Not specified',
+        source: gap.type === 'stated_future_work' ? 'paper_explicit' : 'inferred',
+        confidence: gap.confidence || 0.75,
+        paper_id: paper.id,
+        paper_title: paper.title
+      }));
+      
+      console.log(`✅ Extracted ${parsedGaps.length} research gaps from: ${paper.title}`);
+      
+    } catch (parseError) {
+      console.error(`❌ Failed to parse LLM gap response for "${paper.title}":`, parseError.message);
+      console.log('Raw LLM Response (first 500 chars):', response?.substring(0, 500));
+      
+      // Fallback: Extract gaps from text using simple parsing
+      parsedGaps = extractGapsFromText(response, paper, analysis);
+    }
+    
+    return parsedGaps;
+    
+  } catch (error) {
+    console.error('Error in identifyGaps:', error);
+    
+    // Fallback to rule-based extraction
+    const gaps = [];
+    
+    if (analysis.futureWork && analysis.futureWork !== 'No future work explicitly mentioned') {
+      gaps.push({
+        type: 'stated_future_work',
+        description: analysis.futureWork,
+        priority: 'high',
+        confidence: 0.85,
+        source: 'paper_explicit',
+        paper_id: paper.id,
+        paper_title: paper.title
+      });
+    }
+    
+    if (analysis.limitations && analysis.limitations !== 'No explicit limitations stated') {
+      gaps.push({
+        type: 'limitation_derived',
+        description: `Addressing stated limitations: ${analysis.limitations}`,
+        priority: 'medium',
+        confidence: 0.7,
+        source: 'inferred',
+        paper_id: paper.id,
+        paper_title: paper.title
+      });
+    }
+    
+    return gaps.length > 0 ? gaps : [{
+      type: 'general',
+      description: `Further research needed to extend the findings of: ${paper.title}`,
+      priority: 'low',
+      confidence: 0.5,
+      source: 'fallback',
+      paper_id: paper.id,
+      paper_title: paper.title
+    }];
+  }
+}
+
+/**
+ * Extract gaps from non-JSON LLM response text
+ */
+function extractGapsFromText(text, paper, analysis) {
+  const gaps = [];
+  
+  if (!text || text.trim().length === 0) {
+    console.log('⚠️  Empty LLM response, using rule-based fallback');
+    return getRuleBasedGaps(paper, analysis);
+  }
+  
+  // Try to extract numbered gaps (1., 2., etc.)
+  const numberedPattern = /(?:^|\n)\s*(\d+)[\.\)]\s*(.+?)(?=(?:\n\s*\d+[\.\)])|$)/gs;
+  const matches = [...text.matchAll(numberedPattern)];
+  
+  if (matches.length > 0) {
+    matches.forEach((match, index) => {
+      if (match[2] && match[2].trim().length > 20) {
+        gaps.push({
+          description: match[2].trim(),
+          type: 'inferred',
+          priority: index < 3 ? 'high' : 'medium',
+          rationale: 'Extracted from LLM text response',
+          source: 'llm_text_parsed',
+          confidence: 0.7,
+          paper_id: paper.id,
+          paper_title: paper.title
+        });
+      }
+    });
+  }
+  
+  // If we got gaps from numbered list, return them
+  if (gaps.length > 0) {
+    console.log(`✅ Extracted ${gaps.length} gaps from numbered list in: ${paper.title}`);
+    return gaps.slice(0, 7); // Max 7 gaps
+  }
+  
+  // Otherwise, try to extract by sentences mentioning "gap" or "future"
+  const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 30);
+  const gapKeywords = ['gap', 'future', 'limitation', 'unexplored', 'missing', 'lack', 'needed', 'require'];
+  
+  sentences.forEach((sentence, index) => {
+    const lower = sentence.toLowerCase();
+    if (gapKeywords.some(kw => lower.includes(kw)) && gaps.length < 5) {
+      gaps.push({
+        description: sentence.trim(),
+        type: 'inferred',
+        priority: gaps.length < 2 ? 'high' : 'medium',
+        rationale: 'Identified from LLM analysis',
+        source: 'llm_text_extracted',
+        confidence: 0.65,
+        paper_id: paper.id,
+        paper_title: paper.title
+      });
+    }
+  });
+  
+  if (gaps.length > 0) {
+    console.log(`✅ Extracted ${gaps.length} gaps from text analysis in: ${paper.title}`);
+    return gaps;
+  }
+  
+  // Final fallback
+  console.log('⚠️  Could not parse LLM text, using rule-based fallback');
+  return getRuleBasedGaps(paper, analysis);
+}
+
+/**
+ * Rule-based gap extraction (fallback)
+ */
+function getRuleBasedGaps(paper, analysis) {
+  const gaps = [];
+  
+  if (analysis.futureWork && analysis.futureWork !== 'No future work explicitly mentioned') {
     gaps.push({
       type: 'stated_future_work',
       description: analysis.futureWork,
       priority: 'high',
+      rationale: 'Stated in paper',
       confidence: 0.85,
-      source: 'paper_explicit'
+      source: 'paper_explicit',
+      paper_id: paper.id,
+      paper_title: paper.title
     });
   }
-
-  // Inferred from limitations
-  const limitationGaps = inferGapsFromLimitations(analysis.limitations);
-  gaps.push(...limitationGaps);
-
-  // Methodological gaps
-  const methodGaps = identifyMethodologicalGaps(paper, analysis);
-  gaps.push(...methodGaps);
-
+  
+  if (analysis.limitations && analysis.limitations !== 'No explicit limitations stated') {
+    gaps.push({
+      type: 'limitation_derived',
+      description: `Addressing stated limitations: ${analysis.limitations}`,
+      priority: 'medium',
+      rationale: 'Derived from limitations',
+      confidence: 0.7,
+      source: 'inferred',
+      paper_id: paper.id,
+      paper_title: paper.title
+    });
+  }
+  
+  // Add generic methodological gap
+  gaps.push({
+    type: 'methodological',
+    description: `Further validation and comparative analysis of the approach presented in: ${paper.title}`,
+    priority: 'medium',
+    rationale: 'Standard methodological improvement',
+    confidence: 0.6,
+    source: 'rule_based',
+    paper_id: paper.id,
+    paper_title: paper.title
+  });
+  
+  console.log(`✅ Generated ${gaps.length} rule-based gaps for: ${paper.title}`);
   return gaps;
 }
 
@@ -635,10 +923,9 @@ async function logToDatabase(runId, agentId, level, message, contextData = {}) {
   try {
     await supabase.from('rmri_logs').insert({
       run_id: runId,
-      agent_id: agentId,
-      log_level: level,
+      level: level,
       message: message,
-      context_data: contextData
+      metadata: contextData
     });
   } catch (error) {
     debug('⚠️  Failed to log to database:', error.message);
@@ -651,18 +938,13 @@ async function logToDatabase(runId, agentId, level, message, contextData = {}) {
 async function updateAgentStatus(agentId, status, metadata = {}) {
   try {
     const updates = {
-      status: status,
-      metadata: metadata
+      status: status
     };
-    
-    if (status === 'active' && !metadata.started_at) {
-      updates.started_at = new Date().toISOString();
-    }
     
     if (status === 'completed' || status === 'failed') {
       updates.completed_at = new Date().toISOString();
       if (metadata.executionTime) {
-        updates.execution_time_ms = metadata.executionTime;
+        updates.processing_time = metadata.executionTime;
       }
     }
     

@@ -13,12 +13,16 @@ const Queue = require('bull');
 const { createClient } = require('@supabase/supabase-js');
 const contextStorage = require('../services/contextStorage');
 const debug = require('debug')('researchai:meso-agent');
+const LLMClients = require('../services/llmClients');
 
 // Initialize Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+// Initialize LLM Clients
+const llmClients = new LLMClients();
 
 // Create Bull Queue for meso agent jobs
 const mesoAgentQueue = new Queue('rmri-meso-agent', {
@@ -42,7 +46,7 @@ const mesoAgentQueue = new Queue('rmri-meso-agent', {
  * Meso Agent Job Processor
  * Clusters and synthesizes micro agent outputs by theme
  */
-mesoAgentQueue.process(async (job, done) => {
+mesoAgentQueue.process(async (job) => {
   const { runId, agentId, iteration, llmClient } = job.data;
   const startTime = Date.now();
 
@@ -55,7 +59,7 @@ mesoAgentQueue.process(async (job, done) => {
     );
 
     // Update agent status
-    await updateAgentStatus(agentId, 'active', { iteration });
+    await updateAgentStatus(agentId, 'running', { iteration });
 
     // Step 1: Read all micro agent outputs from context storage
     const microOutputs = await readMicroOutputs(runId, iteration);
@@ -65,6 +69,13 @@ mesoAgentQueue.process(async (job, done) => {
     }
 
     debug(`📊 Processing ${microOutputs.length} micro outputs`);
+    
+    // DEBUG: Check what gaps are in micro outputs
+    console.log(`🔍 Meso received ${microOutputs.length} micro outputs:`);
+    microOutputs.forEach((output, idx) => {
+      const gaps = output.researchGaps || output.gaps || [];
+      console.log(`   Micro ${idx}: ${output.title} - ${gaps.length} gaps`);
+    });
 
     // Step 2: Extract embeddings for clustering
     const embeddingsData = extractEmbeddingsForClustering(microOutputs);
@@ -105,9 +116,9 @@ mesoAgentQueue.process(async (job, done) => {
       
       // Statistics
       statistics: {
-        avgClusterSize: clusters.reduce((sum, c) => sum + c.papers.length, 0) / clusters.length,
-        minClusterSize: Math.min(...clusters.map(c => c.papers.length)),
-        maxClusterSize: Math.max(...clusters.map(c => c.papers.length)),
+        avgClusterSize: clusters.length > 0 ? clusters.reduce((sum, c) => sum + c.papers.length, 0) / clusters.length : 0,
+        minClusterSize: clusters.length > 0 ? Math.min(...clusters.map(c => c.papers.length)) : 0,
+        maxClusterSize: clusters.length > 0 ? Math.max(...clusters.map(c => c.papers.length)) : 0,
         totalContributions: microOutputs.reduce((sum, m) => sum + (m.contributions?.length || 0), 0),
         totalGaps: microOutputs.reduce((sum, m) => sum + (m.researchGaps?.length || 0), 0)
       }
@@ -127,15 +138,9 @@ mesoAgentQueue.process(async (job, done) => {
     // Step 10: Store in results table
     await supabase.from('rmri_results').insert({
       run_id: runId,
-      agent_id: agentId,
-      result_type: 'synthesis',
-      content: mesoOutput,
-      confidence_score: clusterConfidence,
-      sources: microOutputs.map(m => ({
-        title: m.title,
-        paperId: m.paperId
-      })),
-      is_final: false
+      iteration_number: iteration,
+      result_type: 'clusters',
+      data: mesoOutput
     });
 
     // Log completion
@@ -153,21 +158,35 @@ mesoAgentQueue.process(async (job, done) => {
 
     debug(`✅ Meso Agent completed in ${executionTime}ms`);
 
-    done(null, mesoOutput);
+    return mesoOutput;
 
   } catch (error) {
+    console.error(`❌ MESO AGENT FULL ERROR for ${agentId}:`, {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      runId,
+      agentId,
+      iteration
+    });
+    
     debug(`❌ Meso Agent error:`, error.message);
 
-    await logToDatabase(runId, agentId, 'error',
-      `Meso agent failed: ${error.message}`,
-      { error: error.stack }
-    );
+    try {
+      await logToDatabase(runId, agentId, 'error',
+        `Meso agent failed: ${error.message}`,
+        { error: error.stack, errorName: error.name }
+      );
 
-    await updateAgentStatus(agentId, 'failed', {
-      error: error.message
-    });
+      await updateAgentStatus(agentId, 'failed', {
+        error: error.message,
+        errorStack: error.stack
+      });
+    } catch (logError) {
+      console.error('Failed to log meso error to database:', logError);
+    }
 
-    done(error);
+    throw error;
   }
 });
 
@@ -406,7 +425,12 @@ async function summarizeClusters(clusters, llmClient) {
 async function summarizeCluster(cluster, llmClient) {
   // Collect all contributions and gaps from cluster
   const allContributions = cluster.papers.flatMap(p => p.contributions || []);
-  const allGaps = cluster.papers.flatMap(p => p.gaps || []);
+  const allGaps = cluster.papers.flatMap(p => p.researchGaps || p.gaps || []);
+  
+  console.log(`📊 Meso cluster ${cluster.clusterId}: ${cluster.papers.length} papers, ${allGaps.length} total gaps`);
+  cluster.papers.forEach(p => {
+    console.log(`   - ${p.title}: ${(p.researchGaps || p.gaps || []).length} gaps`);
+  });
 
   // Identify theme from centroid keywords
   const theme = identifyTheme(cluster.centroid.keywords, cluster.papers);
@@ -426,8 +450,8 @@ async function summarizeCluster(cluster, llmClient) {
     papers: cluster.papers.map(p => ({
       paperId: p.paperId,
       title: p.title,
-      year: p.metadata.year,
-      citations: p.metadata.citations
+      year: p.year || p.metadata?.year || new Date().getFullYear(),
+      citations: p.citations || p.metadata?.citations || 0
     })),
     
     // Synthesized information
@@ -438,10 +462,10 @@ async function summarizeCluster(cluster, llmClient) {
     
     // Metadata
     yearRange: {
-      min: Math.min(...cluster.papers.map(p => p.metadata.year || 9999)),
-      max: Math.max(...cluster.papers.map(p => p.metadata.year || 0))
+      min: Math.min(...cluster.papers.map(p => p.year || p.metadata?.year || 9999)),
+      max: Math.max(...cluster.papers.map(p => p.year || p.metadata?.year || 0))
     },
-    avgCitations: cluster.papers.reduce((sum, p) => sum + (p.metadata.citations || 0), 0) / cluster.size,
+    avgCitations: cluster.papers.reduce((sum, p) => sum + (p.citations || p.metadata?.citations || 0), 0) / cluster.size,
     confidence: cluster.cohesion
   };
 }
@@ -470,25 +494,27 @@ function extractCommonMethodologies(papers) {
   const methodologies = {};
   
   papers.forEach(paper => {
-    // Extract from contributions
-    const contribText = paper.contributions
-      .map(c => c.description)
-      .join(' ')
-      .toLowerCase();
-    
-    // Common ML/AI methodologies
-    const methods = [
-      'neural network', 'deep learning', 'machine learning',
-      'transformer', 'lstm', 'cnn', 'rnn',
-      'reinforcement learning', 'supervised', 'unsupervised',
-      'clustering', 'classification', 'regression'
-    ];
-    
-    methods.forEach(method => {
-      if (contribText.includes(method)) {
-        methodologies[method] = (methodologies[method] || 0) + 1;
-      }
-    });
+    // Extract from contributions (handle both array and undefined)
+    if (paper.contributions && Array.isArray(paper.contributions)) {
+      const contribText = paper.contributions
+        .map(c => c.description || c.text || c)
+        .join(' ')
+        .toLowerCase();
+      
+      // Common ML/AI methodologies
+      const methods = [
+        'neural network', 'deep learning', 'machine learning',
+        'transformer', 'lstm', 'cnn', 'rnn',
+        'reinforcement learning', 'supervised', 'unsupervised',
+        'clustering', 'classification', 'regression'
+      ];
+      
+      methods.forEach(method => {
+        if (contribText.includes(method)) {
+          methodologies[method] = (methodologies[method] || 0) + 1;
+        }
+      });
+    }
   });
   
   // Return top methodologies
@@ -580,17 +606,42 @@ function synthesizeGaps(gaps) {
   // Group by priority
   const highPriority = gaps.filter(g => g.priority === 'high');
   const mediumPriority = gaps.filter(g => g.priority === 'medium');
+  const lowPriority = gaps.filter(g => g.priority === 'low' || !g.priority);
   
+  // Return ALL gaps grouped by priority (don't filter)
   return [
     {
       priority: 'high',
       count: highPriority.length,
-      gaps: highPriority.slice(0, 5).map(g => g.description)
+      gaps: highPriority.map(g => ({
+        description: g.description,
+        type: g.type,
+        confidence: g.confidence,
+        source: g.source,
+        rationale: g.rationale
+      }))
     },
     {
       priority: 'medium',
       count: mediumPriority.length,
-      gaps: mediumPriority.slice(0, 5).map(g => g.description)
+      gaps: mediumPriority.map(g => ({
+        description: g.description,
+        type: g.type,
+        confidence: g.confidence,
+        source: g.source,
+        rationale: g.rationale
+      }))
+    },
+    {
+      priority: 'low',
+      count: lowPriority.length,
+      gaps: lowPriority.map(g => ({
+        description: g.description,
+        type: g.type,
+        confidence: g.confidence,
+        source: g.source,
+        rationale: g.rationale
+      }))
     }
   ].filter(g => g.count > 0);
 }
@@ -694,10 +745,9 @@ async function logToDatabase(runId, agentId, level, message, contextData = {}) {
   try {
     await supabase.from('rmri_logs').insert({
       run_id: runId,
-      agent_id: agentId,
-      log_level: level,
+      level: level,
       message: message,
-      context_data: contextData
+      metadata: contextData
     });
   } catch (error) {
     debug('⚠️  Failed to log to database:', error.message);
@@ -710,18 +760,13 @@ async function logToDatabase(runId, agentId, level, message, contextData = {}) {
 async function updateAgentStatus(agentId, status, metadata = {}) {
   try {
     const updates = {
-      status: status,
-      metadata: metadata
+      status: status
     };
-
-    if (status === 'active') {
-      updates.started_at = new Date().toISOString();
-    }
 
     if (status === 'completed' || status === 'failed') {
       updates.completed_at = new Date().toISOString();
       if (metadata.executionTime) {
-        updates.execution_time_ms = metadata.executionTime;
+        updates.processing_time = metadata.executionTime;
       }
     }
 

@@ -16,9 +16,11 @@ import {
   Brain,
   File,
   FileCode,
-  LucideIcon
+  LucideIcon,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'react-hot-toast';
 import Humanizer from '../components/Humanizer';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -567,46 +569,102 @@ const NotesTab = ({ notes, workspaceId, onCreateNote, userRole }) => (
   </motion.div>
 );
 
-const PapersTab = ({ papers, workspaceId, userRole }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 20 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, y: -20 }}
-    className="space-y-6"
-  >
-    <div className="flex justify-between items-center">
-      <h2 className="text-2xl font-bold text-gray-900">Pinned Papers</h2>
-      <button className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
-        <Plus className="h-4 w-4" />
-        <span>Pin Paper</span>
-      </button>
-    </div>
-    
-    <div className="grid gap-6 md:grid-cols-2">
-      {papers.map((paper) => (
-        <div key={paper.id} className="bg-white rounded-lg shadow border border-gray-200 p-6">
-          <h3 className="font-semibold text-gray-900 mb-2 line-clamp-2">{paper.title}</h3>
-          <p className="text-gray-600 text-sm mb-3">
-            {Array.isArray(paper.authors) ? paper.authors.join(', ') : paper.authors}
-          </p>
-          <p className="text-gray-600 text-sm mb-4 line-clamp-3">{paper.abstract}</p>
-          <div className="flex items-center justify-between text-xs text-gray-500">
-            <span>{paper.publication_year} • {paper.journal}</span>
-            <span>{paper.citation_count} citations</span>
-          </div>
-        </div>
-      ))}
-    </div>
-    
-    {papers.length === 0 && (
-      <div className="text-center py-12">
-        <BookOpen className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 mb-2">No papers pinned</h3>
-        <p className="text-gray-600 mb-4">Pin important papers to this workspace for easy access.</p>
+const PapersTab = ({ papers, workspaceId, userRole }) => {
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [unpinning, setUnpinning] = useState<string | null>(null);
+
+  const handleUnpinPaper = async (paperId: string) => {
+    setUnpinning(paperId);
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`/api/workspaces/${workspaceId}/papers/${paperId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        toast.success('Paper unpinned');
+        window.location.reload(); // Reload to refresh papers list
+      } else {
+        toast.error('Failed to unpin paper');
+      }
+    } catch (error) {
+      console.error('Error unpinning paper:', error);
+      toast.error('Failed to unpin paper');
+    } finally {
+      setUnpinning(null);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="space-y-6"
+    >
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold text-gray-900">Pinned Papers</h2>
+        <button 
+          onClick={() => setShowPinModal(true)}
+          className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+        >
+          <Plus className="h-4 w-4" />
+          <span>Pin Paper</span>
+        </button>
       </div>
-    )}
-  </motion.div>
-);
+      
+      <div className="grid gap-6 md:grid-cols-2">
+        {papers.map((paper) => (
+          <div key={paper.id} className="bg-white rounded-lg shadow border border-gray-200 p-6 relative">
+            <button
+              onClick={() => handleUnpinPaper(paper.id)}
+              disabled={unpinning === paper.id}
+              className="absolute top-4 right-4 text-gray-400 hover:text-red-600"
+              title="Unpin paper"
+            >
+              {unpinning === paper.id ? (
+                <div className="animate-spin h-4 w-4 border-2 border-gray-300 border-t-green-600 rounded-full"></div>
+              ) : (
+                <X className="h-4 w-4" />
+              )}
+            </button>
+            <h3 className="font-semibold text-gray-900 mb-2 line-clamp-2 pr-8">{paper.title}</h3>
+            <p className="text-gray-600 text-sm mb-3">
+              {Array.isArray(paper.authors) ? paper.authors.join(', ') : paper.authors}
+            </p>
+            <p className="text-gray-600 text-sm mb-4 line-clamp-3">{paper.abstract}</p>
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <span>{paper.publication_year} • {paper.journal || paper.venue}</span>
+              <span>{paper.citation_count} citations</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      
+      {papers.length === 0 && (
+        <div className="text-center py-12">
+          <BookOpen className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-lg font-medium text-gray-900 mb-2">No papers pinned</h3>
+          <p className="text-gray-600 mb-4">Pin important papers to this workspace for easy access.</p>
+        </div>
+      )}
+
+      {showPinModal && (
+        <PinPaperModal 
+          workspaceId={workspaceId} 
+          onClose={() => setShowPinModal(false)}
+          onSuccess={() => {
+            setShowPinModal(false);
+            window.location.reload();
+          }}
+        />
+      )}
+    </motion.div>
+  );
+};
 
 const VisualsTab = ({ workspaceId, papers, userRole }) => (
   <motion.div
@@ -677,5 +735,233 @@ const ActivityTab = ({ activity, workspaceId }) => (
     </div>
   </motion.div>
 );
+
+const PinPaperModal = ({ workspaceId, onClose, onSuccess }: { workspaceId: string; onClose: () => void; onSuccess: () => void }) => {
+  const [formData, setFormData] = useState({
+    paper_id: '',
+    title: '',
+    authors: '',
+    abstract: '',
+    publication_year: '',
+    journal: '',
+    venue: '',
+    citation_count: '',
+    keywords: '',
+    pdf_url: '',
+    paper_url: '',
+    notes: ''
+  });
+  const [pinning, setPinning] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPinning(true);
+
+    try {
+      const token = localStorage.getItem('authToken');
+      const response = await fetch(`/api/workspaces/${workspaceId}/papers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          paper_id: formData.paper_id,
+          title: formData.title,
+          authors: formData.authors.split(',').map(a => a.trim()).filter(Boolean),
+          abstract: formData.abstract || null,
+          publication_year: formData.publication_year ? parseInt(formData.publication_year) : null,
+          journal: formData.journal || null,
+          venue: formData.venue || null,
+          citation_count: formData.citation_count ? parseInt(formData.citation_count) : 0,
+          keywords: formData.keywords.split(',').map(k => k.trim()).filter(Boolean),
+          pdf_url: formData.pdf_url || null,
+          paper_url: formData.paper_url || null,
+          notes: formData.notes || null
+        })
+      });
+
+      if (response.ok) {
+        toast.success('Paper pinned successfully!');
+        onSuccess();
+      } else {
+        const error = await response.json();
+        toast.error(error.message || 'Failed to pin paper');
+      }
+    } catch (error) {
+      console.error('Error pinning paper:', error);
+      toast.error('Failed to pin paper');
+    } finally {
+      setPinning(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-gray-900">Pin Paper to Workspace</h2>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Paper ID / DOI * <span className="text-gray-500">(DOI, ArXiv ID, or unique identifier)</span>
+              </label>
+              <input
+                type="text"
+                required
+                value={formData.paper_id}
+                onChange={(e) => setFormData({ ...formData, paper_id: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="10.1234/example or arXiv:2301.00000"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Title *</label>
+              <input
+                type="text"
+                required
+                value={formData.title}
+                onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="Paper title"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Authors <span className="text-gray-500">(comma-separated)</span>
+              </label>
+              <input
+                type="text"
+                value={formData.authors}
+                onChange={(e) => setFormData({ ...formData, authors: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="Smith J., Doe A., Johnson B."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Abstract</label>
+              <textarea
+                value={formData.abstract}
+                onChange={(e) => setFormData({ ...formData, abstract: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                rows={3}
+                placeholder="Paper abstract..."
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
+                <input
+                  type="number"
+                  value={formData.publication_year}
+                  onChange={(e) => setFormData({ ...formData, publication_year: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                  placeholder="2024"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Citations</label>
+                <input
+                  type="number"
+                  value={formData.citation_count}
+                  onChange={(e) => setFormData({ ...formData, citation_count: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                  placeholder="0"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Journal / Venue</label>
+              <input
+                type="text"
+                value={formData.venue}
+                onChange={(e) => setFormData({ ...formData, venue: e.target.value, journal: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="Nature, Science, IEEE, etc."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Keywords <span className="text-gray-500">(comma-separated)</span>
+              </label>
+              <input
+                type="text"
+                value={formData.keywords}
+                onChange={(e) => setFormData({ ...formData, keywords: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="machine learning, AI, neural networks"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">PDF URL</label>
+              <input
+                type="url"
+                value={formData.pdf_url}
+                onChange={(e) => setFormData({ ...formData, pdf_url: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="https://..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Paper URL</label>
+              <input
+                type="url"
+                value={formData.paper_url}
+                onChange={(e) => setFormData({ ...formData, paper_url: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                placeholder="https://..."
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+              <textarea
+                value={formData.notes}
+                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                rows={2}
+                placeholder="Personal notes about this paper..."
+              />
+            </div>
+
+            <div className="flex justify-end space-x-3 pt-4">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={pinning}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={pinning}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center space-x-2"
+              >
+                {pinning && <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>}
+                <span>{pinning ? 'Pinning...' : 'Pin Paper'}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default WorkspacePage;

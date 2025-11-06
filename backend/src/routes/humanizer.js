@@ -85,6 +85,8 @@ router.post('/humanize', requireAuth, rateLimitHumanize, async (req, res) => {
 
   } catch (error) {
     const processingTime = Date.now() - startTime;
+    console.error('❌ [Humanizer] Error:', error);
+    console.error('Stack trace:', error.stack);
     debug('Error humanizing text:', error.message);
     
     // Log error to database

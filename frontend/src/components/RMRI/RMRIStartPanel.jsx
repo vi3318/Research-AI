@@ -5,7 +5,7 @@
  * Features: Domain selection, iteration config, paper upload
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
@@ -50,6 +50,66 @@ const RMRIStartPanel = ({ onRunCreated }) => {
   const [uploading, setUploading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState(null);
+  const [workspaceId, setWorkspaceId] = useState(null);
+  
+  // Ref to prevent duplicate workspace creation
+  const workspaceCreatedRef = useRef(false);
+
+  // Create a fresh RMRI workspace (only once)
+  useEffect(() => {
+    const createWorkspace = async () => {
+      // Prevent duplicate creation
+      if (workspaceCreatedRef.current || workspaceId) return;
+      workspaceCreatedRef.current = true;
+      
+      try {
+        console.log('� Creating fresh RMRI workspace...');
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          console.log('❌ No session found');
+          return;
+        }
+
+        // Create a new RMRI workspace with timestamp
+        const timestamp = new Date().toLocaleString('en-US', { 
+          month: 'short', 
+          day: 'numeric', 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
+        
+        const { data: newWorkspace, error: createError } = await supabase
+          .from('workspaces')
+          .insert({
+            name: `RMRI Analysis - ${timestamp}`,
+            description: 'Research gap analysis workspace',
+            owner_id: user.id
+          })
+          .select()
+          .single();
+
+        if (createError) {
+          console.error('❌ Error creating workspace:', createError);
+          toast.error('Failed to create workspace');
+          return;
+        }
+
+        if (newWorkspace) {
+          console.log('✅ Created workspace:', newWorkspace.id);
+          setWorkspaceId(newWorkspace.id);
+          toast.success('Workspace ready for RMRI analysis');
+        }
+      } catch (err) {
+        console.error('❌ Error creating workspace:', err);
+        toast.error('Workspace setup failed');
+        workspaceCreatedRef.current = false; // Reset on error
+      }
+    };
+
+    if (user && !workspaceId && !workspaceCreatedRef.current) {
+      createWorkspace();
+    }
+  }, [user]);
 
   // File upload handlers
   const handleFileUpload = async (e) => {
@@ -128,6 +188,11 @@ const RMRIStartPanel = ({ onRunCreated }) => {
       return;
     }
 
+    if (!workspaceId) {
+      setError('Setting up workspace...');
+      return;
+    }
+
     setStarting(true);
     setError(null);
 
@@ -149,6 +214,7 @@ const RMRIStartPanel = ({ onRunCreated }) => {
           query,
           domains: selectedDomains,
           config: {
+            workspace_id: workspaceId,
             maxDepth: maxIterations,
             convergenceThreshold,
             minClusterSize: 2,
@@ -188,12 +254,10 @@ const RMRIStartPanel = ({ onRunCreated }) => {
 
       console.log('✅ RMRI execution started successfully');
       toast.success('RMRI analysis started successfully!');
-      console.log('✅ RMRI execution started successfully');
-      toast.success('RMRI analysis started successfully!');
 
       // Notify parent
-      if (onRunStarted) {
-        onRunStarted(runId);
+      if (onRunCreated) {
+        onRunCreated(runId);
       }
 
       // Reset form
@@ -451,9 +515,9 @@ const RMRIStartPanel = ({ onRunCreated }) => {
         whileTap={{ scale: 0.98 }}
         type="button"
         onClick={handleStartRun}
-        disabled={starting || !query.trim() || papers.length === 0}
+        disabled={starting || !query.trim() || papers.length === 0 || !workspaceId}
         className={`w-full py-4 rounded-lg text-base font-bold text-white transition-all ${
-          starting || !query.trim() || papers.length === 0
+          starting || !query.trim() || papers.length === 0 || !workspaceId
             ? 'bg-gray-400 cursor-not-allowed'
             : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-lg hover:shadow-xl'
         }`}
@@ -465,6 +529,14 @@ const RMRIStartPanel = ({ onRunCreated }) => {
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
             Starting RMRI Analysis...
+          </span>
+        ) : !workspaceId ? (
+          <span className="flex items-center justify-center gap-2">
+            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+            </svg>
+            Setting up workspace...
           </span>
         ) : (
           <span className="flex items-center justify-center gap-2">

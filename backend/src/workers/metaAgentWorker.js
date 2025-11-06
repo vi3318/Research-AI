@@ -14,12 +14,16 @@ const Queue = require('bull');
 const { createClient } = require('@supabase/supabase-js');
 const contextStorage = require('../services/contextStorage');
 const debug = require('debug')('researchai:meta-agent');
+const LLMClients = require('../services/llmClients');
 
 // Initialize Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
+
+// Initialize LLM Clients
+const llmClients = new LLMClients();
 
 // Create Bull Queue for meta agent jobs
 const metaAgentQueue = new Queue('rmri-meta-agent', {
@@ -43,7 +47,7 @@ const metaAgentQueue = new Queue('rmri-meta-agent', {
  * Meta Agent Job Processor
  * Cross-domain synthesis and gap ranking
  */
-metaAgentQueue.process(async (job, done) => {
+metaAgentQueue.process(async (job) => {
   const { runId, agentId, iteration, llmClient } = job.data;
   const startTime = Date.now();
 
@@ -56,7 +60,7 @@ metaAgentQueue.process(async (job, done) => {
     );
 
     // Update agent status
-    await updateAgentStatus(agentId, 'active', { iteration });
+    await updateAgentStatus(agentId, 'running', { iteration });
 
     // Step 1: Read all meso agent outputs
     const mesoOutputs = await readMesoOutputs(runId, iteration);
@@ -79,23 +83,34 @@ metaAgentQueue.process(async (job, done) => {
     const synthesizedGaps = synthesizeAllGaps(mesoOutputs);
 
     // Step 5: Rank gaps by importance, novelty, and feasibility
+    console.log(`🔄 Starting gap ranking...`);
     const rankedGaps = rankResearchGaps(synthesizedGaps, mesoOutputs);
+    console.log(`✅ Ranked ${rankedGaps.length} gaps`);
 
     // Step 6: Identify research frontiers
+    console.log(`🔄 Identifying research frontiers...`);
     const frontiers = identifyResearchFrontiers(mesoOutputs, crossDomainPatterns);
+    console.log(`✅ Identified ${frontiers.length} frontiers`);
 
     // Step 7: Generate actionable research directions
-    const researchDirections = generateResearchDirections(rankedGaps, frontiers, llmClient);
+    console.log(`🔄 Generating research directions...`);
+    const researchDirections = await generateResearchDirections(rankedGaps, frontiers, llmClient);
+    console.log(`✅ Generated ${researchDirections?.length || 0} research directions`);
 
     // Step 8: Check convergence with previous iteration
+    console.log(`🔄 Checking convergence...`);
     const convergence = previousMetaOutput 
       ? checkConvergence(rankedGaps, previousMetaOutput.rankedGaps)
       : { converged: false, similarity: 0, reason: 'First iteration' };
+    console.log(`✅ Convergence check complete: ${convergence.converged}`);
 
     // Step 9: Calculate overall confidence
+    console.log(`🔄 Calculating confidence...`);
     const overallConfidence = calculateMetaConfidence(mesoOutputs, rankedGaps, convergence);
+    console.log(`✅ Confidence calculated: ${overallConfidence}`);
 
     // Step 10: Structure meta output
+    console.log(`🔄 Structuring meta output with ${rankedGaps.length} gaps...`);
     const metaOutput = {
       iteration: iteration,
       agentId: agentId,
@@ -111,8 +126,8 @@ metaAgentQueue.process(async (job, done) => {
       
       // Comprehensive statistics
       statistics: {
-        totalClusters: mesoOutputs.reduce((sum, m) => sum + m.totalClusters, 0),
-        totalPapers: mesoOutputs.reduce((sum, m) => sum + m.totalPapers, 0),
+        totalClusters: mesoOutputs.reduce((sum, m) => sum + (m.totalClusters || 0), 0),
+        totalPapers: mesoOutputs.reduce((sum, m) => sum + (m.totalPapers || 0), 0),
         totalGapsIdentified: synthesizedGaps.length,
         uniqueThemes: extractUniqueThemes(mesoOutputs).length,
         domainsCovered: mesoOutputs.length
@@ -124,8 +139,11 @@ metaAgentQueue.process(async (job, done) => {
       timestamp: new Date().toISOString(),
       shouldContinue: !convergence.converged && iteration < 4
     };
+    
+    console.log(`✅ Meta output structured with ${metaOutput.rankedGaps.length} ranked gaps`);
 
     // Step 11: Write to context storage
+    console.log(`🔄 Writing to context storage...`);
     const contextKey = `meta_output_${iteration}`;
     await contextStorage.writeContext(
       runId,
@@ -135,20 +153,22 @@ metaAgentQueue.process(async (job, done) => {
       'overwrite',
       { iteration, converged: convergence.converged }
     );
+    console.log(`✅ Context storage write complete`);
 
-    // Step 12: Store in results table
-    await supabase.from('rmri_results').insert({
+    // Step 11: Store in results table
+    console.log(`🔄 Storing in results table...`);
+    const { error: dbError } = await supabase.from('rmri_results').insert({
       run_id: runId,
-      agent_id: agentId,
-      result_type: convergence.converged ? 'final_report' : 'synthesis',
-      content: metaOutput,
-      confidence_score: overallConfidence,
-      sources: mesoOutputs.map(m => ({
-        iteration: m.iteration,
-        clusters: m.totalClusters
-      })),
-      is_final: convergence.converged
+      iteration_number: iteration,
+      result_type: 'synthesis',
+      data: metaOutput
     });
+    
+    if (dbError) {
+      console.error(`❌ Database insert error:`, dbError);
+      throw dbError;
+    }
+    console.log(`✅ Results table insert complete`);
 
     // Log completion
     await logToDatabase(runId, agentId, 'info',
@@ -166,21 +186,36 @@ metaAgentQueue.process(async (job, done) => {
 
     debug(`✅ Meta Agent completed in ${executionTime}ms (converged: ${convergence.converged})`);
 
-    done(null, metaOutput);
+    console.log(`🎉 RETURNING META OUTPUT with ${metaOutput.rankedGaps.length} gaps`);
+    return metaOutput;
 
   } catch (error) {
+    console.error(`❌ META AGENT FULL ERROR for ${agentId}:`, {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      runId,
+      agentId,
+      iteration
+    });
+    
     debug(`❌ Meta Agent error:`, error.message);
 
-    await logToDatabase(runId, agentId, 'error',
-      `Meta agent failed: ${error.message}`,
-      { error: error.stack }
-    );
+    try {
+      await logToDatabase(runId, agentId, 'error',
+        `Meta agent failed: ${error.message}`,
+        { error: error.stack, errorName: error.name }
+      );
 
-    await updateAgentStatus(agentId, 'failed', {
-      error: error.message
-    });
+      await updateAgentStatus(agentId, 'failed', {
+        error: error.message,
+        errorStack: error.stack
+      });
+    } catch (logError) {
+      console.error('Failed to log meta error to database:', logError);
+    }
 
-    done(error);
+    throw error;
   }
 });
 
@@ -323,22 +358,35 @@ function identifyCrossDomainPatterns(mesoOutputs) {
 function synthesizeAllGaps(mesoOutputs) {
   const allGaps = [];
 
-  mesoOutputs.forEach(mesoOutput => {
+  console.log(`🔍 Meta: Processing ${mesoOutputs.length} meso outputs`);
+  
+  mesoOutputs.forEach((mesoOutput, idx) => {
+    console.log(`   Meso ${idx}: ${mesoOutput.clusters?.length || 0} clusters`);
+    
     // Extract gaps from clusters
-    mesoOutput.clusters.forEach(cluster => {
-      cluster.identifiedGaps.forEach(gapGroup => {
-        gapGroup.gaps.forEach(gap => {
-          allGaps.push({
-            gap: gap,
-            priority: gapGroup.priority,
-            theme: cluster.theme.label,
-            clusterSize: cluster.size,
-            clusterCohesion: cluster.cohesion,
-            source: 'meso_cluster'
+    if (mesoOutput.clusters) {
+      mesoOutput.clusters.forEach(cluster => {
+        const gapsCount = cluster.identifiedGaps?.reduce((sum, g) => sum + (g.gaps?.length || 0), 0) || 0;
+        console.log(`     - Cluster ${cluster.clusterId}: ${gapsCount} gaps`);
+        
+        if (cluster.identifiedGaps) {
+          cluster.identifiedGaps.forEach(gapGroup => {
+            if (gapGroup.gaps) {
+              gapGroup.gaps.forEach(gap => {
+                allGaps.push({
+                  gap: gap,
+                  priority: gapGroup.priority,
+                  theme: cluster.theme?.label || 'Unknown',
+                  clusterSize: cluster.size,
+                  clusterCohesion: cluster.cohesion,
+                  source: 'meso_cluster'
+                });
+              });
+            }
           });
-        });
+        }
       });
-    });
+    }
 
     // Extract thematic gaps
     if (mesoOutput.thematicGaps) {
@@ -354,6 +402,7 @@ function synthesizeAllGaps(mesoOutputs) {
     }
   });
 
+  console.log(`🎯 Meta: Synthesized ${allGaps.length} total gaps from all meso outputs`);
   return allGaps;
 }
 
@@ -363,6 +412,11 @@ function synthesizeAllGaps(mesoOutputs) {
 function rankResearchGaps(gaps, mesoOutputs) {
   // Calculate scores for each gap
   const scoredGaps = gaps.map(gap => {
+    // Extract description string from gap object
+    const gapDescription = typeof gap.gap === 'string' 
+      ? gap.gap 
+      : (gap.gap?.description || gap.gap?.gap || 'Unknown gap');
+    
     const scores = {
       importance: calculateImportanceScore(gap, mesoOutputs),
       novelty: calculateNoveltyScore(gap),
@@ -377,13 +431,15 @@ function rankResearchGaps(gaps, mesoOutputs) {
       scores.impact * 0.20;
 
     return {
-      gap: gap.gap,
+      gap: gapDescription,  // Use 'gap' for frontend compatibility
+      type: gap.gap?.type || 'inferred',
       theme: gap.theme,
       priority: gap.priority,
       scores: scores,
       totalScore: totalScore,
-      confidence: gap.confidence || 0.7,
+      confidence: gap.gap?.confidence || gap.confidence || 0.7,
       source: gap.source,
+      rationale: gap.gap?.rationale,
       ranking: 0 // Will be set after sorting
     };
   });
@@ -428,7 +484,10 @@ function calculateImportanceScore(gap, mesoOutputs) {
 function calculateNoveltyScore(gap) {
   let score = 0.5;
 
-  const gapText = gap.gap.toLowerCase();
+  // Extract text from gap (handle both string and object)
+  const gapText = (typeof gap.gap === 'string' 
+    ? gap.gap 
+    : (gap.gap?.description || '')).toLowerCase();
 
   // Novel if mentions unexplored areas
   const noveltyKeywords = [
@@ -454,7 +513,10 @@ function calculateNoveltyScore(gap) {
 function calculateFeasibilityScore(gap) {
   let score = 0.6; // Moderate feasibility by default
 
-  const gapText = gap.gap.toLowerCase();
+  // Extract text from gap (handle both string and object)
+  const gapText = (typeof gap.gap === 'string' 
+    ? gap.gap 
+    : (gap.gap?.description || '')).toLowerCase();
 
   // Feasibility indicators
   if (gapText.includes('data available') || gapText.includes('existing')) {
@@ -480,7 +542,10 @@ function calculateFeasibilityScore(gap) {
 function calculateImpactScore(gap) {
   let score = 0.5;
 
-  const gapText = gap.gap.toLowerCase();
+  // Extract text from gap (handle both string and object)
+  const gapText = (typeof gap.gap === 'string' 
+    ? gap.gap 
+    : (gap.gap?.description || '')).toLowerCase();
 
   // Impact keywords
   const impactKeywords = [
@@ -568,11 +633,11 @@ function generateResearchDirections(rankedGaps, frontiers, llmClient) {
       priority: index + 1,
       direction: gap.gap,
       theme: gap.theme,
-      rationale: `High-impact gap with score ${gap.totalScore.toFixed(2)}`,
-      expectedImpact: gap.scores.impact,
-      feasibility: gap.scores.feasibility,
-      novelty: gap.scores.novelty,
-      confidence: gap.confidence
+      rationale: `High-impact gap with score ${(gap.totalScore || 0).toFixed(2)}`,
+      expectedImpact: gap.scores?.impact || 0.5,
+      feasibility: gap.scores?.feasibility || 0.5,
+      novelty: gap.scores?.novelty || 0.5,
+      confidence: gap.confidence || 0.7
     });
   });
 
@@ -670,10 +735,9 @@ async function logToDatabase(runId, agentId, level, message, contextData = {}) {
   try {
     await supabase.from('rmri_logs').insert({
       run_id: runId,
-      agent_id: agentId,
-      log_level: level,
+      level: level,
       message: message,
-      context_data: contextData
+      metadata: contextData
     });
   } catch (error) {
     debug('⚠️  Failed to log to database:', error.message);
@@ -686,18 +750,13 @@ async function logToDatabase(runId, agentId, level, message, contextData = {}) {
 async function updateAgentStatus(agentId, status, metadata = {}) {
   try {
     const updates = {
-      status: status,
-      metadata: metadata
+      status: status
     };
-
-    if (status === 'active') {
-      updates.started_at = new Date().toISOString();
-    }
 
     if (status === 'completed' || status === 'failed') {
       updates.completed_at = new Date().toISOString();
       if (metadata.executionTime) {
-        updates.execution_time_ms = metadata.executionTime;
+        updates.processing_time = metadata.executionTime;
       }
     }
 
