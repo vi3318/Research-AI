@@ -95,7 +95,11 @@ export default function App() {
           </nav>
         </div>
       </header>
-      <main className={`${window.location.pathname === '/' ? '' : 'mx-auto max-w-7xl px-6 py-8'}`}>
+      <main className={`${
+        window.location.pathname === '/' || window.location.pathname === '/chat' || window.location.pathname === '/enhanced'
+          ? '' 
+          : 'mx-auto max-w-7xl px-6 py-8'
+      }`}>
         <Routes>
           <Route path="/" element={<ProtectedRoute><EnhancedChat /></ProtectedRoute>} />
           <Route path="/research" element={<ProtectedRoute><ResearchJobs /></ProtectedRoute>} />

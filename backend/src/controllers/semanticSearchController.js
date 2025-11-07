@@ -42,22 +42,28 @@ const semanticSearch = asyncHandler(async (req, res) => {
 
     // Step 3: If not enough results, scrape new papers
     let allPapers = existingPapers || [];
+    let didScrape = false;
     
     if (allPapers.length < limit) {
       console.log(`[Semantic Search] Insufficient results (${allPapers.length}/${limit}), scraping new papers...`);
       
-      const scrapedPapers = await scrapeAndIndexPapers(query, sources, limit);
+      const scrapedPapers = await scrapeAndIndexPapers(query, sources, limit * 2); // Scrape more to ensure enough results
+      didScrape = true;
       
-      // Re-run vector search to get newly indexed papers
-      const { data: newResults } = await supabase
+      // Re-run vector search with lower threshold to get newly indexed papers
+      const { data: newResults, error: reSearchError } = await supabase
         .rpc('search_papers_by_embedding', {
           query_embedding: queryEmbedding,
-          match_threshold: threshold,
-          match_count: limit
+          match_threshold: 0.3, // Lower threshold to include more scraped papers
+          match_count: limit * 2 // Get more results
         });
       
+      if (reSearchError) {
+        console.error('[Semantic Search] Re-search error:', reSearchError);
+      }
+      
       allPapers = newResults || allPapers;
-      console.log(`[Semantic Search] After scraping: ${allPapers.length} total papers`);
+      console.log(`[Semantic Search] After scraping: ${allPapers.length} total papers, scraped: ${scrapedPapers?.length || 0}`);
     }
 
     // Step 4: Return results
@@ -65,7 +71,7 @@ const semanticSearch = asyncHandler(async (req, res) => {
       query,
       results: allPapers.slice(0, limit),
       total: allPapers.length,
-      scraped: allPapers.length > (existingPapers?.length || 0),
+      scraped: didScrape,
       timestamp: new Date().toISOString()
     });
 

@@ -76,7 +76,7 @@ interface Activity {
   user_email: string;
 }
 
-type TabType = 'documents' | 'notes' | 'papers' | 'visuals' | 'humanizer' | 'activity';
+type TabType = 'documents' | 'notes' | 'papers' | 'humanizer' | 'activity';
 
 const WorkspacePage: React.FC = () => {
   const { workspaceId } = useParams<{ workspaceId: string }>();
@@ -136,9 +136,6 @@ const WorkspacePage: React.FC = () => {
         case 'papers':
           await loadPapers();
           break;
-        case 'visuals':
-          // Visual analytics data will be loaded by individual chart components
-          break;
         case 'activity':
           await loadActivity();
           break;
@@ -162,15 +159,39 @@ const WorkspacePage: React.FC = () => {
   };
 
   const loadPapers = async () => {
-    const response = await fetch(`/api/workspaces/${workspaceId}/papers`, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+    try {
+      const response = await fetch(`/api/workspaces/${workspaceId}/pins`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+        }
+      });
+      
+      const data = await response.json();
+      console.log('[WorkspacePage] Pinned papers response:', data);
+      
+      if (data.success) {
+        // Backend returns pins with nested papers structure: { papers: { id, title, ... } }
+        const formattedPapers = (data.data || []).map(pin => ({
+          id: pin.paper_id,
+          title: pin.papers?.title || 'Untitled',
+          authors: pin.papers?.authors || '',
+          abstract: pin.papers?.abstract || '',
+          publication_year: pin.papers?.year || pin.papers?.publication_year || null,
+          journal: pin.papers?.venue || pin.papers?.journal || '',
+          venue: pin.papers?.venue || '',
+          citation_count: pin.papers?.citation_count || 0,
+          paper_url: pin.papers?.url || pin.papers?.link || '',
+          pdf_url: pin.papers?.pdf_url || '',
+          notes: pin.notes || '',
+          tags: pin.tags || [],
+          added_at: pin.added_at
+        }));
+        
+        console.log('[WorkspacePage] Formatted papers:', formattedPapers);
+        setPapers(formattedPapers);
       }
-    });
-    
-    const data = await response.json();
-    if (data.success) {
-      setPapers(data.papers);
+    } catch (error) {
+      console.error('[WorkspacePage] Error loading papers:', error);
     }
   };
 
@@ -226,7 +247,7 @@ const WorkspacePage: React.FC = () => {
 
     setInviting(true);
     try {
-      const response = await fetch(`/api/workspaces/${workspaceId}/members`, {
+      const response = await fetch(`/api/workspaces/${workspaceId}/invite`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -240,18 +261,19 @@ const WorkspacePage: React.FC = () => {
 
       const data = await response.json();
       if (data.success) {
-        alert(`Invitation sent to ${inviteEmail}`);
+        alert(`✅ ${data.message || `Invitation sent to ${inviteEmail}`}\n\nThe user can now access this workspace from their workspace list.`);
         setShowInviteModal(false);
         setInviteEmail('');
         setInviteRole('member');
         // Refresh members list
         loadWorkspace();
       } else {
-        alert(data.message || 'Failed to invite member');
+        console.error('Invite failed:', data);
+        alert(`❌ ${data.message || 'Failed to invite member'}`);
       }
     } catch (error) {
       console.error('Error inviting member:', error);
-      alert('Failed to send invitation. Please try again.');
+      alert('❌ Failed to send invitation. Please try again.');
     } finally {
       setInviting(false);
     }
@@ -261,7 +283,6 @@ const WorkspacePage: React.FC = () => {
     { id: 'documents', label: 'Documents', icon: File, color: 'bg-indigo-500' },
     { id: 'notes', label: 'Notes', icon: FileText, color: 'bg-blue-500' },
     { id: 'papers', label: 'Papers', icon: BookOpen, color: 'bg-green-500' },
-    { id: 'visuals', label: 'Visuals', icon: BarChart3, color: 'bg-purple-500' },
     { id: 'humanizer', label: 'Humanizer', icon: Brain, color: 'bg-pink-500' },
     { id: 'activity', label: 'Activity', icon: Activity, color: 'bg-orange-500' }
   ];
@@ -374,15 +395,6 @@ const WorkspacePage: React.FC = () => {
                   key="papers"
                   papers={papers}
                   workspaceId={workspaceId}
-                  userRole={userRole}
-                />
-              )}
-              
-              {activeTab === 'visuals' && (
-                <VisualsTab
-                  key="visuals"
-                  workspaceId={workspaceId}
-                  papers={papers}
                   userRole={userRole}
                 />
               )}
@@ -519,7 +531,14 @@ const WorkspacePage: React.FC = () => {
 };
 
 // Individual Tab Components will be created in separate files
-const NotesTab = ({ notes, workspaceId, onCreateNote, userRole }) => (
+const NotesTab = ({ notes, workspaceId, onCreateNote, userRole }) => {
+  const navigate = useNavigate();
+
+  const handleNoteClick = (noteId: string) => {
+    navigate(`/workspace/${workspaceId}/document/${noteId}`);
+  };
+
+  return (
   <motion.div
     initial={{ opacity: 0, y: 20 }}
     animate={{ opacity: 1, y: 0 }}
@@ -539,7 +558,11 @@ const NotesTab = ({ notes, workspaceId, onCreateNote, userRole }) => (
     
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
       {notes.map((note) => (
-        <div key={note.id} className="bg-white rounded-lg shadow border border-gray-200 p-6 hover:shadow-md transition-shadow">
+        <div 
+          key={note.id} 
+          onClick={() => handleNoteClick(note.id)}
+          className="bg-white rounded-lg shadow border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer hover:border-blue-400"
+        >
           <h3 className="font-semibold text-gray-900 mb-2">{note.title}</h3>
           <p className="text-gray-600 text-sm mb-4 line-clamp-3">
             {note.content_text || 'No content yet...'}
@@ -567,7 +590,8 @@ const NotesTab = ({ notes, workspaceId, onCreateNote, userRole }) => (
       </div>
     )}
   </motion.div>
-);
+  );
+};
 
 const PapersTab = ({ papers, workspaceId, userRole }) => {
   const [showPinModal, setShowPinModal] = useState(false);
@@ -577,18 +601,21 @@ const PapersTab = ({ papers, workspaceId, userRole }) => {
     setUnpinning(paperId);
     try {
       const token = localStorage.getItem('authToken');
-      const response = await fetch(`/api/workspaces/${workspaceId}/papers/${paperId}`, {
+      const response = await fetch(`/api/workspaces/${workspaceId}/unpin`, {
         method: 'DELETE',
         headers: {
+          'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
-        }
+        },
+        body: JSON.stringify({ paper_id: paperId })
       });
 
       if (response.ok) {
         toast.success('Paper unpinned');
         window.location.reload(); // Reload to refresh papers list
       } else {
-        toast.error('Failed to unpin paper');
+        const error = await response.json();
+        toast.error(error.message || 'Failed to unpin paper');
       }
     } catch (error) {
       console.error('Error unpinning paper:', error);
@@ -665,39 +692,6 @@ const PapersTab = ({ papers, workspaceId, userRole }) => {
     </motion.div>
   );
 };
-
-const VisualsTab = ({ workspaceId, papers, userRole }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 20 }}
-    animate={{ opacity: 1, y: 0 }}
-    exit={{ opacity: 0, y: -20 }}
-    className="space-y-6"
-  >
-    <div className="flex justify-between items-center">
-      <h2 className="text-2xl font-bold text-gray-900">Visual Analytics</h2>
-      <button className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
-        <Plus className="h-4 w-4" />
-        <span>Create Chart</span>
-      </button>
-    </div>
-    
-    <div className="grid gap-6 md:grid-cols-2">
-      <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-        <h3 className="font-semibold text-gray-900 mb-4">Citation Trends</h3>
-        <div className="h-64 bg-gray-100 rounded-lg flex items-center justify-center">
-          <p className="text-gray-500">Chart will be rendered here</p>
-        </div>
-      </div>
-      
-      <div className="bg-white rounded-lg shadow border border-gray-200 p-6">
-        <h3 className="font-semibold text-gray-900 mb-4">Keyword Network</h3>
-        <div className="h-64 bg-gray-100 rounded-lg flex items-center justify-center">
-          <p className="text-gray-500">Network visualization will be rendered here</p>
-        </div>
-      </div>
-    </div>
-  </motion.div>
-);
 
 const ActivityTab = ({ activity, workspaceId }) => (
   <motion.div
@@ -800,12 +794,17 @@ const PinPaperModal = ({ workspaceId, onClose, onSuccess }: { workspaceId: strin
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="p-6">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex justify-between items-center mb-2">
             <h2 className="text-xl font-bold text-gray-900">Pin Paper to Workspace</h2>
             <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
               <X className="h-5 w-5" />
             </button>
           </div>
+          
+          <p className="text-sm text-gray-600 mb-4">
+            Add papers to your workspace to reference them in your research. You can manually enter paper details or 
+            use the DOI/ArXiv ID to automatically fetch metadata. These papers will be accessible to all workspace members.
+          </p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>

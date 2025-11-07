@@ -90,7 +90,12 @@ function CitationModal({ isOpen, onClose, paperData }: CitationModalProps): JSX.
   const generateCitations = useCallback(async () => {
     if (loading || hasGenerated || !paperData) return; // Prevent multiple simultaneous requests
     
-    console.log('Generating citations for:', paperData);
+    console.log('[CitationModal] Generating citations for paper:', {
+      title: paperData.title,
+      authors: paperData.authors,
+      year: paperData.year,
+      fullData: paperData
+    });
     setLoading(true);
     setError(null);
     setWarnings([]);
@@ -102,7 +107,12 @@ function CitationModal({ isOpen, onClose, paperData }: CitationModalProps): JSX.
       const { apiClient } = await import('../lib/apiClient');
       const response = await apiClient.generateCitations(paperData);
       
-      console.log('Citation response:', response);
+      console.log('[CitationModal] Citation response received:', response);
+      console.log('[CitationModal] Citations:', {
+        ieee: response.citations?.ieee,
+        apa: response.citations?.apa,
+        mla: response.citations?.mla
+      });
 
       if (response.success) {
         setCitations(response.citations);
@@ -111,16 +121,12 @@ function CitationModal({ isOpen, onClose, paperData }: CitationModalProps): JSX.
         toast.success('✅ Citations generated successfully!');
         if (response.warnings?.length > 0) {
           setWarnings(response.warnings);
-          toast('⚠️ Some citation warnings were found. Check the details below.', {
-            icon: '⚠️',
-            duration: 4000,
-          });
         }
       } else {
         throw new Error(response.message || 'Failed to generate citations');
       }
     } catch (error: any) {
-      console.error('Citation generation error:', error);
+      console.error('[CitationModal] Citation generation error:', error);
       toast.dismiss(loadingToast);
       
       // Provide specific error messages for common issues
@@ -141,18 +147,18 @@ function CitationModal({ isOpen, onClose, paperData }: CitationModalProps): JSX.
 
   useEffect(() => {
     if (isOpen && paperData && paperIdentifier && !hasGenerated && !loading && !citations) {
-      // Add a delay to prevent rapid generation cycles
+      // Add a small delay to ensure modal is fully rendered
       const timer = setTimeout(() => {
-        if (isOpen && !hasGenerated && !citations) { // Double-check conditions
+        if (isOpen && !hasGenerated && !citations) {
           generateCitations();
         }
-      }, 500); // Increased delay to prevent flickering
+      }, 300);
       
       return () => clearTimeout(timer);
     }
   }, [isOpen, paperIdentifier, hasGenerated, loading, citations, generateCitations]);
 
-  // Reset state when modal closes with a small delay to prevent flicker
+  // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
       const timer = setTimeout(() => {
@@ -161,38 +167,12 @@ function CitationModal({ isOpen, onClose, paperData }: CitationModalProps): JSX.
         setError(null);
         setWarnings([]);
         setCopiedStyle(null);
-      }, 200); // Small delay to prevent flicker on quick open/close
+        setLoading(false);
+      }, 300); // Delay to prevent flicker during modal close animation
       
       return () => clearTimeout(timer);
     }
   }, [isOpen]);
-
-  // Reset state when modal closes or paper changes
-  useEffect(() => {
-    if (!isOpen) {
-      // Small delay to prevent flickering during modal transition
-      const timeoutId = setTimeout(() => {
-        setCitations(null);
-        setError(null);
-        setWarnings([]);
-        setHasGenerated(false);
-        setLoading(false);
-      }, 200);
-      
-      return () => clearTimeout(timeoutId);
-    }
-  }, [isOpen]);
-
-  // Reset state when paper changes
-  useEffect(() => {
-    if (paperIdentifier) {
-      setCitations(null);
-      setError(null);
-      setWarnings([]);
-      setHasGenerated(false);
-      setLoading(false);
-    }
-  }, [paperIdentifier]);
 
   const copyToClipboard = useCallback(async (citation: any, style: string) => {
     if (copiedStyle === style) return; // Prevent multiple rapid clicks

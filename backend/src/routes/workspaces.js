@@ -594,6 +594,58 @@ router.get('/workspaces/:workspaceId', requireAuth, async (req, res) => {
 // =========================================
 // WORKSPACE MEMBERS
 // =========================================
+// WORKSPACE MEMBERS
+// =========================================
+
+// Get workspace members
+router.get('/workspaces/:workspaceId/members', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { workspaceId } = req.params;
+
+    // Check user access
+    const { data: membership } = await supabase
+      .from('workspace_users')
+      .select('role')
+      .eq('workspace_id', workspaceId)
+      .eq('user_id', userId)
+      .single();
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      });
+    }
+
+    // Get all workspace members
+    const { data: members, error } = await supabase
+      .from('workspace_users')
+      .select(`
+        id,
+        user_id,
+        role,
+        joined_at,
+        users(name, email, avatar_url)
+      `)
+      .eq('workspace_id', workspaceId)
+      .order('joined_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: members
+    });
+  } catch (error) {
+    console.error('Error fetching workspace members:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch workspace members',
+      error: error.message
+    });
+  }
+});
 
 // Invite user to workspace
 router.post('/workspaces/:workspaceId/invite', requireAuth, async (req, res) => {
@@ -601,6 +653,19 @@ router.post('/workspaces/:workspaceId/invite', requireAuth, async (req, res) => 
     const userId = req.user.id;
     const { workspaceId } = req.params;
     const { email, role = 'member' } = req.body;
+
+    // Get workspace details and inviter info
+    const { data: workspace } = await supabase
+      .from('workspaces')
+      .select('name')
+      .eq('id', workspaceId)
+      .single();
+
+    const { data: inviter } = await supabase
+      .from('users')
+      .select('name, email')
+      .eq('id', userId)
+      .single();
 
     // Check if user is owner/admin
     const { data: membership } = await supabase
@@ -620,14 +685,14 @@ router.post('/workspaces/:workspaceId/invite', requireAuth, async (req, res) => 
     // Find user by email
     const { data: invitedUser } = await supabase
       .from('users')
-      .select('id')
+      .select('id, name, email')
       .eq('email', email)
       .single();
 
     if (!invitedUser) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'User not found. Please make sure they have an account.'
       });
     }
 
@@ -650,25 +715,38 @@ router.post('/workspaces/:workspaceId/invite', requireAuth, async (req, res) => 
       if (error.code === '23505') { // Unique constraint violation
         return res.status(400).json({
           success: false,
-          message: 'User is already a member'
+          message: 'User is already a member of this workspace'
         });
       }
       throw error;
     }
 
-    // Log activity
+    // Log activity for inviter
     await supabase
       .from('workspace_activity')
       .insert({
         workspace_id: workspaceId,
         user_id: userId,
         activity_type: 'member_joined',
-        description: `Invited ${email} to workspace`
+        description: `Added ${invitedUser.name || email} to workspace`
       });
+
+    // Log activity notification for invited user
+    await supabase
+      .from('workspace_activity')
+      .insert({
+        workspace_id: workspaceId,
+        user_id: invitedUser.id,
+        activity_type: 'workspace_invite',
+        description: `You were invited to "${workspace?.name || 'workspace'}" by ${inviter?.name || inviter?.email || 'a team member'}`
+      });
+
+    console.log(`✅ User ${invitedUser.email} invited to workspace ${workspace?.name} by ${inviter?.email}`);
 
     res.json({
       success: true,
-      member: newMember
+      member: newMember,
+      message: `Successfully invited ${invitedUser.name || email} to the workspace`
     });
   } catch (error) {
     console.error('Error inviting user:', error);

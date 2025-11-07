@@ -1082,7 +1082,7 @@ export default function EnhancedChat() {
             initial={{ x: -300 }}
             animate={{ x: 0 }}
             exit={{ x: -300 }}
-            className={`${isMobile ? 'fixed inset-y-0 left-0 z-50' : 'relative'} w-80 flex flex-col border-r`}
+            className={`${isMobile ? 'fixed inset-y-0 left-0 z-50' : 'relative'} w-80 h-full flex flex-col border-r`}
             style={{ 
               backgroundColor: theme.colors.surface,
               borderColor: theme.colors.border
@@ -1090,7 +1090,7 @@ export default function EnhancedChat() {
           >
             {/* Header */}
             <div 
-              className="p-4 border-b flex items-center justify-between"
+              className="px-6 py-3 border-b flex items-center justify-between flex-shrink-0"
               style={{ borderColor: theme.colors.border }}
             >
               <h2 className="font-semibold text-lg" style={{ color: theme.colors.textPrimary }}>
@@ -1335,7 +1335,7 @@ export default function EnhancedChat() {
                 </div>
               </div>
               <div className="flex gap-2">
-                {['chat', 'papers', 'analysis'].map((view) => (
+                {['chat', 'papers'].map((view) => (
                   <motion.button
                     key={view}
                     onClick={() => setActiveView(view as any)}
@@ -1349,7 +1349,6 @@ export default function EnhancedChat() {
                   >
                     {view === 'chat' && <HiChatAlt2 className="h-4 w-4" />}
                     {view === 'papers' && <HiDocumentText className="h-4 w-4" />}
-                    {view === 'analysis' && <HiChartBar className="h-4 w-4" />}
                     {view}
                     {view === 'papers' && searchResults.length > 0 && (
                       <span className="ml-1 px-2 py-0.5 text-xs rounded-full bg-white bg-opacity-20">
@@ -1740,7 +1739,7 @@ export default function EnhancedChat() {
                             </div>
                             <div className="flex items-center justify-between">
                               <div className="flex gap-2 text-xs">
-                                {paper.citationCount && (
+                                {paper.citationCount > 0 && (
                                   <span 
                                     className="px-2 py-1 rounded-full"
                                     style={{ 
@@ -1751,7 +1750,7 @@ export default function EnhancedChat() {
                                     📊 {paper.citationCount}
                                   </span>
                                 )}
-                                {paper.relevanceScore && (
+                                {paper.relevanceScore && paper.relevanceScore > 0 && (
                                   <span 
                                     className="px-2 py-1 rounded-full"
                                     style={{ 
@@ -1850,272 +1849,6 @@ export default function EnhancedChat() {
                           <HiArrowRight className="h-4 w-4" />
                           Start Research
                         </motion.button>
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-
-                {activeView === 'analysis' && (
-                  <motion.div
-                    key="analysis"
-                    initial={{ opacity: 0, x: -20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: 20 }}
-                    className="h-full overflow-y-auto p-4 md:p-6"
-                  >
-                    {gapAnalysis || hypotheses ? (
-                      <div className="space-y-6">
-                        {gapAnalysis && <ResearchGapVisualization gapAnalysis={gapAnalysis} />}
-                        {hypotheses && (
-                          <motion.div
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            className="rounded-xl p-6 border"
-                            style={{ 
-                              backgroundColor: theme.colors.surface,
-                              borderColor: theme.colors.border
-                            }}
-                          >
-                            <div className="flex items-center gap-3 mb-6">
-                              <HiBeaker className="h-6 w-6" style={{ color: theme.colors.accent }} />
-                              <h3 className="text-xl font-semibold" style={{ color: theme.colors.textPrimary }}>
-                                🧪 Novel Research Hypotheses
-                              </h3>
-                              <span 
-                                className="px-3 py-1 rounded-full text-sm"
-                                style={{
-                                  backgroundColor: `${theme.colors.success}20`,
-                                  color: theme.colors.success
-                                }}
-                              >
-                                {hypotheses.hypotheses.length} generated
-                              </span>
-                            </div>
-                            
-                            <div className="grid gap-4">
-                              {hypotheses.hypotheses.slice(0, 6).map((hypothesis: any, i: number) => (
-                                <motion.div
-                                  key={`hypothesis-${i}-${hypothesis.title || hypothesis.question || i}`}
-                                  initial={{ opacity: 0, y: 10 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  transition={{ delay: i * 0.1 }}
-                                  className="p-4 rounded-lg border hover:shadow-sm transition-all"
-                                  style={{ 
-                                    backgroundColor: theme.colors.background,
-                                    borderColor: theme.colors.border
-                                  }}
-                                >
-                                  <div className="flex items-start justify-between mb-3">
-                                    <div className="flex items-center gap-2">
-                                      <span 
-                                        className="px-2 py-1 rounded-full text-xs font-medium"
-                                        style={{
-                                          backgroundColor: `${theme.colors.primary}20`,
-                                          color: theme.colors.primary
-                                        }}
-                                      >
-                                        {hypothesis.type?.replace('-', ' ') || 'hypothesis'}
-                                      </span>
-                                      {hypothesis.confidence && (
-                                        <span 
-                                          className="px-2 py-1 rounded-full text-xs"
-                                          style={{
-                                            backgroundColor: hypothesis.confidence > 0.7 ? `${theme.colors.success}20` : `${theme.colors.warning}20`,
-                                            color: hypothesis.confidence > 0.7 ? theme.colors.success : theme.colors.warning
-                                          }}
-                                        >
-                                          {Math.round(hypothesis.confidence * 100)}% confidence
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  
-                                  <h4 className="font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
-                                    {hypothesis.hypothesis}
-                                  </h4>
-                                  
-                                  {hypothesis.rationale && (
-                                    <p className="text-sm mb-2" style={{ color: theme.colors.textSecondary }}>
-                                      <strong>Rationale:</strong> {hypothesis.rationale}
-                                    </p>
-                                  )}
-                                  
-                                  {hypothesis.testMethod && (
-                                    <p className="text-sm mb-2" style={{ color: theme.colors.textSecondary }}>
-                                      <strong>Test Method:</strong> {hypothesis.testMethod}
-                                    </p>
-                                  )}
-                                  
-                                  {hypothesis.significance && (
-                                    <p className="text-sm" style={{ color: theme.colors.textMuted }}>
-                                      <strong>Significance:</strong> {hypothesis.significance}
-                                    </p>
-                                  )}
-                                </motion.div>
-                              ))}
-                            </div>
-                          </motion.div>
-                        )}
-                        
-                        {/* Presentation Generation Section */}
-                        <motion.div
-                          initial={{ opacity: 0, y: 20 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          className="rounded-xl p-6 border"
-                          style={{ 
-                            backgroundColor: theme.colors.surface,
-                            borderColor: theme.colors.border
-                          }}
-                        >
-                          <div className="flex items-center gap-3 mb-6">
-                            <HiDocumentText className="h-6 w-6" style={{ color: theme.colors.accent }} />
-                            <h3 className="text-xl font-semibold" style={{ color: theme.colors.textPrimary }}>
-                              🎯 Generate PowerPoint Presentations
-                            </h3>
-                          </div>
-                          
-                          <div className="grid gap-4">
-                            <div className="p-4 rounded-lg border" style={{ borderColor: theme.colors.border }}>
-                              <h4 className="font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
-                                Upload Research Paper
-                              </h4>
-                              <p className="text-sm mb-4" style={{ color: theme.colors.textSecondary }}>
-                                Upload a PDF research paper to automatically generate a comprehensive PowerPoint presentation with 8 structured slides.
-                              </p>
-                              
-                              <div className="flex gap-3">
-                                <motion.button
-                                  onClick={() => document.getElementById('pdf-upload')?.click()}
-                                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-white"
-                                  style={{ 
-                                    background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
-                                  }}
-                                  whileHover={{ scale: 1.05 }}
-                                  whileTap={{ scale: 0.95 }}
-                                >
-                                  📄 Upload PDF
-                                </motion.button>
-                                
-                                <input
-                                  id="pdf-upload"
-                                  type="file"
-                                  accept=".pdf"
-                                  className="hidden"
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0]
-                                    if (file) {
-                                      handlePDFUpload(file)
-                                    }
-                                  }}
-                                />
-                                
-                                <span className="text-xs text-slate-400 self-center">
-                                  Supports PDF files up to 10MB
-                                </span>
-                              </div>
-                            </div>
-                            
-                            {sessionContext.length > 0 && (
-                              <div className="p-4 rounded-lg border" style={{ borderColor: theme.colors.border }}>
-                                <h4 className="font-medium mb-2" style={{ color: theme.colors.textPrimary }}>
-                                  Generate from Session Papers
-                                </h4>
-                                <p className="text-sm mb-4" style={{ color: theme.colors.textSecondary }}>
-                                  Create presentations from papers already in your research session.
-                                </p>
-                                
-                                <div className="grid gap-2">
-                                  {sessionContext.slice(0, 3).map((paper, index) => (
-                                    <motion.button
-                                      key={`context-paper-${paper.paper_id || paper.id || index}`}
-                                      onClick={() => handleGeneratePresentationFromContext(paper)}
-                                      className="flex items-center justify-between p-3 rounded-lg border hover:bg-opacity-50 transition-all text-left"
-                                      style={{ 
-                                        backgroundColor: theme.colors.background,
-                                        borderColor: theme.colors.border
-                                      }}
-                                      whileHover={{ scale: 1.02 }}
-                                      whileTap={{ scale: 0.98 }}
-                                    >
-                                      <div className="flex-1">
-                                        <div className="font-medium text-sm" style={{ color: theme.colors.textPrimary }}>
-                                          {paper.title.substring(0, 80)}...
-                                        </div>
-                                        <div className="text-xs" style={{ color: theme.colors.textSecondary }}>
-                                          {paper.source || 'Academic Paper'}
-                                        </div>
-                                      </div>
-                                      <motion.button
-                                        className="px-3 py-1 text-sm rounded-lg font-medium text-white"
-                                        style={{ 
-                                          background: `linear-gradient(135deg, #8B5CF6, #A855F7)` 
-                                        }}
-                                        whileHover={{ scale: 1.05 }}
-                                        whileTap={{ scale: 0.95 }}
-                                      >
-                                        🎯 Generate
-                                      </motion.button>
-                                    </motion.button>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </motion.div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center h-full text-center">
-                        <motion.div
-                          animate={{ 
-                            scale: [1, 1.1, 1],
-                            rotate: [0, 180, 360]
-                          }}
-                          transition={{ duration: 4, repeat: Infinity }}
-                          className="text-6xl mb-4"
-                        >
-                          📊
-                        </motion.div>
-                        <h3 
-                          className="text-xl font-semibold mb-2"
-                          style={{ color: theme.colors.textPrimary }}
-                        >
-                          No analysis available
-                        </h3>
-                        <p 
-                          className="mb-4"
-                          style={{ color: theme.colors.textSecondary }}
-                        >
-                          Generate research gap analysis from your papers
-                        </p>
-                        <div className="flex gap-3">
-                          <motion.button
-                            onClick={handleGenerateVisualization}
-                            disabled={sessionContext.length === 0}
-                            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                            style={{ 
-                              background: `linear-gradient(135deg, ${theme.colors.primary}, ${theme.colors.primaryHover})` 
-                            }}
-                            whileHover={{ scale: sessionContext.length > 0 ? 1.05 : 1 }}
-                            whileTap={{ scale: sessionContext.length > 0 ? 0.95 : 1 }}
-                          >
-                            <HiChartBar className="h-4 w-4" />
-                            Gap Analysis
-                          </motion.button>
-                          
-                          <motion.button
-                            onClick={handleGenerateHypotheses}
-                            disabled={sessionContext.length === 0}
-                            className="inline-flex items-center gap-2 px-6 py-3 rounded-lg font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                            style={{ 
-                              background: `linear-gradient(135deg, ${theme.colors.accent}, ${theme.colors.success})` 
-                            }}
-                            whileHover={{ scale: sessionContext.length > 0 ? 1.05 : 1 }}
-                            whileTap={{ scale: sessionContext.length > 0 ? 0.95 : 1 }}
-                          >
-                            <HiBeaker className="h-4 w-4" />
-                            🧪 Generate Hypotheses
-                          </motion.button>
-                        </div>
                       </div>
                     )}
                   </motion.div>
@@ -2256,7 +1989,7 @@ export default function EnhancedChat() {
                       <span style={{ color: theme.colors.textSecondary }}>{selectedPaper.publication}</span>
                     </div>
                   )}
-                  {selectedPaper.citationCount && (
+                  {selectedPaper.citationCount > 0 && (
                     <div>
                       <span className="font-medium" style={{ color: theme.colors.textPrimary }}>Citations: </span>
                       <span style={{ color: theme.colors.textSecondary }}>{selectedPaper.citationCount}</span>

@@ -3,7 +3,11 @@ const router = express.Router();
 const multer = require('multer');
 const EnhancedPdfProcessor = require('../services/enhancedPdfProcessor');
 const AutoPptGenerator = require('../services/autoPptGenerator');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const debug = require('debug')('researchai:simple-auto-ppt');
+
+// Initialize Gemini AI
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Configure multer for file uploads
 const upload = multer({
@@ -250,109 +254,654 @@ router.get('/download/:id', (req, res) => {
   }
 });
 
-// Enhanced slide generation logic with better formatting
+// Enhanced slide generation logic with AI-powered summarization and robust fallbacks
 async function generateEnhancedSlides(extractedData) {
   const slides = [];
+  const maxSlides = 15; // Increased limit for comprehensive coverage
   
-  // Title slide
-  slides.push({
-    type: 'title',
-    title: extractedData.sections.title || 'Research Presentation',
-    content: formatTitleSlide(extractedData)
-  });
-
+  debug('Starting AI-powered slide generation with comprehensive content...');
+  
   const sections = extractedData.sections;
   const fullText = extractedData.fullText || '';
   
-  // If standard sections don't exist, extract from subheadings
-  const detectedSections = detectSectionsFromText(fullText, sections);
+  // Adaptive section detection - works with ANY paper format (IEEE, Springer, Elsevier, arXiv, etc.)
+  const detectedSections = await adaptiveSectionDetection(fullText, sections);
   
-  // Abstract slide with bullet points
-  if (detectedSections.abstract) {
-    slides.push({
-      type: 'content',
-      title: 'Abstract',
-      content: formatAbstractSlide(detectedSections.abstract),
-      hasImagePlaceholder: false
-    });
+  debug('Detected sections:', Object.keys(detectedSections).filter(k => detectedSections[k]));
+  
+  // 1. Title Slide (REQUIRED)
+  slides.push({
+    type: 'title',
+    title: detectedSections.title || 'Research Presentation',
+    content: formatTitleSlide(extractedData, detectedSections)
+  });
+  debug(`Slide ${slides.length}: Title - "${detectedSections.title}"`);
+
+  // 2. Abstract / Overview (REQUIRED if exists)
+  if (detectedSections.abstract && detectedSections.abstract.length > 50) {
+    const abstractSlides = await createMultiSlideContent(
+      detectedSections.abstract,
+      'Abstract & Overview',
+      "Summarize the research motivation, purpose, and key contributions. Use 5-6 concise bullet points per slide (max 15 words each).",
+      1, // Max 1 slide for abstract
+      false
+    );
+    slides.push(...abstractSlides);
   }
 
-  // Introduction with key points
-  if (detectedSections.introduction) {
-    const introSlides = createStructuredSlides('Introduction', detectedSections.introduction, 5);
+  // 3. Introduction / Background (if substantial)
+  if (detectedSections.introduction && detectedSections.introduction.length > 200) {
+    const introSlides = await createMultiSlideContent(
+      detectedSections.introduction,
+      'Introduction & Background',
+      "Summarize the problem statement, background, research gap, and objectives. Use 5-6 concise bullet points per slide (max 15 words each).",
+      2, // Allow up to 2 slides for introduction
+      false
+    );
     slides.push(...introSlides);
   }
 
-  // Literature Review / Related Work
-  if (detectedSections.literatureReview) {
-    const litSlides = createStructuredSlides('Literature Review', detectedSections.literatureReview, 4);
-    slides.push(...litSlides);
-  }
-
-  // Methodology with structured points
-  if (detectedSections.methodology) {
-    const methodSlides = createStructuredSlides('Methodology', detectedSections.methodology, 5, true);
+  // 4. Methodology / Model (REQUIRED if exists) - ALLOW MULTIPLE SLIDES
+  if (detectedSections.methodology && detectedSections.methodology.length > 100) {
+    const methodSlides = await createMultiSlideContent(
+      detectedSections.methodology,
+      'Proposed Methodology',
+      "Summarize the research methodology, workflow, models, experimental approach, and technical steps. Use 5-6 concise bullet points per slide (max 15 words each). Focus on technical details.",
+      3, // Allow up to 3 slides for methodology
+      true
+    );
     slides.push(...methodSlides);
   }
 
-  // Results with image placeholders
-  if (detectedSections.results) {
-    const resultSlides = createStructuredSlides('Results', detectedSections.results, 4, true);
-    slides.push(...resultSlides);
+  // 5. Results & Findings (REQUIRED if exists) - ALLOW MULTIPLE SLIDES
+  if (detectedSections.results && detectedSections.results.length > 100) {
+    const resultsSlides = await createMultiSlideContent(
+      detectedSections.results,
+      'Results & Findings',
+      "List key results with numeric values, comparative performance metrics, and specific findings. Use 5-6 concise bullet points per slide (max 15 words each). Be specific with numbers and comparisons.",
+      3, // Allow up to 3 slides for results
+      true
+    );
+    slides.push(...resultsSlides);
   }
 
-  // Discussion
-  if (detectedSections.discussion) {
-    const discussionSlides = createStructuredSlides('Discussion', detectedSections.discussion, 4);
+  // 6. Discussion / Analysis (OPTIONAL - if substantial content)
+  if (detectedSections.discussion && detectedSections.discussion.length > 300) {
+    const discussionSlides = await createMultiSlideContent(
+      detectedSections.discussion,
+      'Discussion & Analysis',
+      "Summarize the key insights, implications, interpretations, and limitations. Use 5-6 concise bullet points per slide (max 15 words each).",
+      2, // Allow up to 2 slides for discussion
+      false
+    );
     slides.push(...discussionSlides);
   }
 
-  // Conclusion with key takeaways
-  if (detectedSections.conclusion) {
-    slides.push({
-      type: 'content',
-      title: 'Conclusion',
-      content: formatConclusionSlide(detectedSections.conclusion),
-      hasImagePlaceholder: false
-    });
+  // 7. Conclusion & Future Work (REQUIRED - ALWAYS LAST)
+  if (detectedSections.conclusion && detectedSections.conclusion.length > 50) {
+    const conclusionSlides = await createMultiSlideContent(
+      detectedSections.conclusion,
+      'Conclusion & Future Work',
+      "Summarize the final takeaways, contributions, and future research directions. Use 4-5 concise bullet points per slide (max 15 words each).",
+      1, // Max 1 slide for conclusion
+      false
+    );
+    slides.push(...conclusionSlides);
   }
 
-  // Process any additional subheadings found
-  for (const [key, content] of Object.entries(detectedSections.additionalSections)) {
-    if (content && content.length > 100) {
-      const additionalSlides = createStructuredSlides(
-        formatSectionTitle(key), 
-        content, 
-        4, 
-        isResultsRelated(key)
+  // LIMIT to maxSlides but prioritize keeping all sections
+  const finalSlides = slides.slice(0, maxSlides);
+  
+  // Remove duplicate content across slides
+  const uniqueSlides = removeDuplicateContent(finalSlides);
+  
+  debug(`✅ FINAL: Generated ${uniqueSlides.length} slides (limit: ${maxSlides})`);
+  debug(`Slide titles: ${uniqueSlides.map((s, i) => `${i + 1}. ${s.title}`).join(', ')}`);
+  
+  // Validate all slides have content
+  const validSlides = uniqueSlides.filter(slide => {
+    if (slide.type === 'title') return true;
+    return slide.content && slide.content.length > 10;
+  });
+  
+  debug(`Valid slides after filtering: ${validSlides.length}`);
+  
+  return validSlides;
+}
+
+// Create multiple slides for a section if content is substantial
+async function createMultiSlideContent(sectionContent, baseTitle, prompt, maxSlides = 2, hasImagePlaceholder = false) {
+  const slides = [];
+  
+  // If content is very long, split it into chunks
+  const contentLength = sectionContent.length;
+  
+  if (contentLength > 2000 && maxSlides > 1) {
+    // Long content - create multiple slides
+    const chunkSize = Math.ceil(contentLength / maxSlides);
+    const chunks = splitContentIntoChunks(sectionContent, chunkSize);
+    
+    for (let i = 0; i < Math.min(chunks.length, maxSlides); i++) {
+      const bulletPoints = await summarizeWithAIRobust(
+        chunks[i],
+        prompt,
+        6 // 6 bullets per slide
       );
-      slides.push(...additionalSlides);
+      
+      if (bulletPoints && bulletPoints.length > 10) {
+        slides.push({
+          type: 'content',
+          title: chunks.length > 1 ? `${baseTitle} (${i + 1}/${chunks.length})` : baseTitle,
+          content: bulletPoints,
+          hasImagePlaceholder: hasImagePlaceholder && i === 0
+        });
+        debug(`Created slide: ${baseTitle} (${i + 1}/${chunks.length})`);
+      }
+    }
+  } else {
+    // Normal content - single slide
+    const bulletPoints = await summarizeWithAIRobust(
+      sectionContent,
+      prompt,
+      6 // 6 bullets per slide
+    );
+    
+    if (bulletPoints && bulletPoints.length > 10) {
+      slides.push({
+        type: 'content',
+        title: baseTitle,
+        content: bulletPoints,
+        hasImagePlaceholder: hasImagePlaceholder
+      });
+      debug(`Created slide: ${baseTitle}`);
     }
   }
-
-  // Ensure minimum slides and add summary if needed
-  if (slides.length < 8) {
-    slides.push({
-      type: 'content',
-      title: 'Key Contributions',
-      content: generateKeyContributions(extractedData),
-      hasImagePlaceholder: false
-    });
-  }
-
-  debug(`Generated ${slides.length} structured slides from paper content`);
+  
   return slides;
 }
 
-// Format title slide with clean structure
-function formatTitleSlide(extractedData) {
-  const authors = extractedData.sections.authors || 'Research Team';
-  const institution = extractedData.sections.institution || 'Academic Institution';
-  const date = extractedData.sections.date || new Date().getFullYear();
+// Split content into logical chunks for multiple slides
+function splitContentIntoChunks(content, chunkSize) {
+  const chunks = [];
+  const paragraphs = content.split(/\n\n+/);
   
-  return `${authors}\n\n${institution}\n\n${date}\n\n${extractedData.sections.abstract ? 
-    extractedData.sections.abstract.substring(0, 150) + '...' : 
-    'Academic Research Presentation'}`;
+  let currentChunk = '';
+  
+  for (const paragraph of paragraphs) {
+    if (currentChunk.length + paragraph.length < chunkSize) {
+      currentChunk += paragraph + '\n\n';
+    } else {
+      if (currentChunk) {
+        chunks.push(currentChunk.trim());
+      }
+      currentChunk = paragraph + '\n\n';
+    }
+  }
+  
+  if (currentChunk) {
+    chunks.push(currentChunk.trim());
+  }
+  
+  // If no chunks created (no paragraph breaks), split by character count
+  if (chunks.length === 0) {
+    for (let i = 0; i < content.length; i += chunkSize) {
+      chunks.push(content.substring(i, i + chunkSize));
+    }
+  }
+  
+  return chunks;
+}
+
+// AI-powered summarization with robust fallback mechanisms
+async function summarizeWithAIRobust(content, prompt, targetBullets = 5) {
+  try {
+    if (!content || content.trim().length < 30) {
+      debug('Content too short for summarization');
+      return null;
+    }
+
+    // Clean the content first
+    const cleanedContent = content
+      .replace(/\n{3,}/g, '\n\n') // Remove excessive newlines
+      .replace(/\s{2,}/g, ' ') // Remove excessive spaces
+      .replace(/\[.*?\]/g, '') // Remove citations like [1], [2]
+      .trim();
+
+    debug(`Summarizing ${cleanedContent.length} chars with AI (target: ${targetBullets} bullets)...`);
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    
+    // Use more content for better context
+    const contentToSummarize = cleanedContent.substring(0, 6000); // Increased from 4000
+    
+    const fullPrompt = `${prompt}
+
+Content to summarize:
+${contentToSummarize}
+
+STRICT Requirements:
+- Generate EXACTLY ${targetBullets} bullet points with comprehensive, detailed content
+- Each bullet point should be 12-18 words (be detailed and informative, not brief)
+- Extract ACTUAL facts, findings, methods, numbers, and specific details from the text
+- Use active voice and clear technical language
+- Include specific metrics, techniques, approaches, and concrete findings
+- Start each point with action verbs or key findings
+- Avoid vague statements - be specific with numbers, methods, and results
+- Format as bullet points with • symbol
+
+IMPORTANT: Extract comprehensive information with technical details, not just high-level summaries.
+
+Output format example:
+• First detailed point with specific information, methods, or metrics included
+• Second comprehensive point including numbers, technical details, or concrete findings
+• Third detailed point with specific methodology, approaches, or quantitative results
+
+Generate ${targetBullets} detailed, comprehensive bullet points now:`;
+
+    const result = await model.generateContent(fullPrompt);
+    const response = await result.response;
+    let text = response.text().trim();
+    
+    debug(`AI response length: ${text.length} chars`);
+    
+    // Clean up the response
+    text = text.replace(/\*\*/g, ''); // Remove bold markers
+    text = text.replace(/^#+\s*/gm, ''); // Remove markdown headers
+    text = text.replace(/```.*\n?/g, ''); // Remove code blocks
+    
+    // Ensure proper bullet formatting
+    const bullets = text.split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 5) // Filter out empty/very short lines
+      .map(line => {
+        // Remove existing bullet markers and numbering
+        line = line.replace(/^[•\-\*\d\.)\]]+\s*/, '').trim();
+        
+        // Allow longer bullets for more detailed content (up to 20 words)
+        const words = line.split(' ');
+        if (words.length > 20) {
+          line = words.slice(0, 20).join(' ') + '...';
+        }
+        return line;
+      })
+      .filter(line => line.length > 15) // Ensure meaningful content (increased from 10)
+      .slice(0, targetBullets); // Take exactly the target number
+
+    // If we got bullets, format them
+    if (bullets.length > 0) {
+      const formatted = bullets.map(b => `• ${b}`).join('\n\n');
+      debug(`Successfully generated ${bullets.length} detailed bullets`);
+      return formatted;
+    }
+
+    // If AI didn't produce good bullets, use fallback
+    debug('AI produced no valid bullets, using fallback extraction');
+    return extractKeyPointsFallback(cleanedContent, targetBullets);
+
+  } catch (error) {
+    debug('AI summarization error:', error.message);
+    // Fallback to simple extraction
+    return extractKeyPointsFallback(content, targetBullets);
+  }
+}
+
+// Adaptive section detection - works with ANY paper format (IEEE, Springer, Elsevier, arXiv, ACM, etc.)
+async function adaptiveSectionDetection(fullText, existingSections = {}) {
+  debug('🔍 Starting adaptive section detection for research paper...');
+  
+  const detected = {
+    title: null,
+    authors: null,
+    abstract: null,
+    introduction: null,
+    methodology: null,
+    results: null,
+    discussion: null,
+    conclusion: null
+  };
+
+  // Multi-pattern section detection - handles variations in formatting
+  const sectionPatterns = {
+    abstract: [
+      /(?:^|\n)\s*(?:ABSTRACT|Abstract)\s*[\n:]([\s\S]*?)(?=\n\s*(?:I\.|1\.|INTRODUCTION|Introduction|Keywords|INDEX TERMS|\n\n[A-Z]))/i,
+      /(?:^|\n)\s*(?:Summary|SUMMARY)\s*[\n:]([\s\S]*?)(?=\n\s*(?:I\.|1\.|INTRODUCTION|Introduction))/i
+    ],
+    introduction: [
+      /(?:^|\n)\s*(?:I\.|1\.|INTRODUCTION|Introduction)\s*[\n:]([\s\S]*?)(?=\n\s*(?:II\.|2\.|RELATED|Related|METHODOLOGY|Methodology|BACKGROUND|Background))/i,
+      /(?:^|\n)\s*(?:BACKGROUND|Background)\s*[\n:]([\s\S]*?)(?=\n\s*(?:METHODOLOGY|Methodology|METHOD|Method))/i
+    ],
+    methodology: [
+      /(?:^|\n)\s*(?:II\.|III\.|2\.|3\.|METHODOLOGY|Methodology|METHODS|Methods|METHOD|Method|PROPOSED|Proposed)\s*[\n:]([\s\S]*?)(?=\n\s*(?:IV\.|V\.|4\.|5\.|RESULT|Result|EXPERIMENT|Experiment|EVALUATION|Evaluation))/i,
+      /(?:^|\n)\s*(?:EXPERIMENTAL|Experimental|APPROACH|Approach)\s+(?:SETUP|Setup|DESIGN|Design)\s*[\n:]([\s\S]*?)(?=\n\s*(?:RESULT|Result|EVALUATION|Evaluation))/i
+    ],
+    results: [
+      /(?:^|\n)\s*(?:IV\.|V\.|4\.|5\.|RESULTS?|Results?|FINDINGS|Findings|EXPERIMENTS?|Experiments?|EVALUATION|Evaluation)\s*(?:AND|and)?\s*(?:DISCUSSION|Discussion)?\s*[\n:]([\s\S]*?)(?=\n\s*(?:VI\.|6\.|DISCUSSION|Discussion|CONCLUSION|Conclusion|RELATED|Related))/i,
+      /(?:^|\n)\s*(?:PERFORMANCE|Performance)\s+(?:EVALUATION|Evaluation|ANALYSIS|Analysis)\s*[\n:]([\s\S]*?)(?=\n\s*(?:DISCUSSION|Discussion|CONCLUSION|Conclusion))/i
+    ],
+    discussion: [
+      /(?:^|\n)\s*(?:V\.|VI\.|5\.|6\.|DISCUSSION|Discussion|ANALYSIS|Analysis)\s*[\n:]([\s\S]*?)(?=\n\s*(?:VII\.|7\.|CONCLUSION|Conclusion|RELATED|Related))/i
+    ],
+    conclusion: [
+      /(?:^|\n)\s*(?:VI\.|VII\.|VIII\.|6\.|7\.|8\.|CONCLUSION|Conclusion|CONCLUSIONS|Conclusions)\s*(?:AND|and)?\s*(?:FUTURE|Future)?\s*(?:WORK|Work)?\s*[\n:]([\s\S]*?)(?=\n\s*(?:REFERENCES|References|ACKNOWLEDGMENT|Acknowledgment|APPENDIX|Appendix|$))/i,
+      /(?:^|\n)\s*(?:CONCLUDING|Concluding)\s+(?:REMARKS|Remarks)\s*[\n:]([\s\S]*?)(?=\n\s*(?:REFERENCES|References|ACKNOWLEDGMENT))/i
+    ]
+  };
+
+  // Try each pattern for each section
+  for (const [sectionName, patterns] of Object.entries(sectionPatterns)) {
+    for (const pattern of patterns) {
+      const match = fullText.match(pattern);
+      if (match && match[1]) {
+        const content = match[1].trim();
+        if (content.length > 50) { // Ensure meaningful content
+          detected[sectionName] = content.substring(0, 3000); // Limit section length
+          debug(`✓ Found ${sectionName}: ${content.length} chars`);
+          break; // Move to next section once found
+        }
+      }
+    }
+  }
+
+  // Extract title - try multiple approaches
+  detected.title = extractTitle(fullText);
+  
+  // Extract authors
+  detected.authors = extractAuthors(fullText);
+
+  // Use existing sections as fallback if detection failed
+  for (const key of Object.keys(detected)) {
+    if (!detected[key] && existingSections[key]) {
+      detected[key] = existingSections[key];
+      debug(`Using existing section for ${key}`);
+    }
+  }
+
+  // Smart fallback: if we didn't find methodology, look for "proposed" sections
+  if (!detected.methodology) {
+    const proposedMatch = fullText.match(/(?:^|\n)\s*(?:PROPOSED|Proposed)\s+(?:METHOD|Method|APPROACH|Approach|SYSTEM|System|MODEL|Model)\s*[\n:]([\s\S]{100,2000})(?=\n\s*[A-Z])/i);
+    if (proposedMatch) {
+      detected.methodology = proposedMatch[0].trim();
+      debug('✓ Found methodology via "Proposed" keyword');
+    }
+  }
+
+  // If still no results section, try "Experimental" or "Evaluation"
+  if (!detected.results) {
+    const evalMatch = fullText.match(/(?:^|\n)\s*(?:EXPERIMENTAL|Experimental|EVALUATION|Evaluation)\s*(?:RESULTS|Results)?\s*[\n:]([\s\S]{100,2000})(?=\n\s*[A-Z])/i);
+    if (evalMatch) {
+      detected.results = evalMatch[0].trim();
+      debug('✓ Found results via "Experimental/Evaluation" keyword');
+    }
+  }
+
+  const foundSections = Object.keys(detected).filter(k => detected[k]);
+  debug(`📊 Section detection complete: ${foundSections.length}/8 sections found`);
+  debug(`Found: ${foundSections.join(', ')}`);
+
+  return detected;
+}
+
+// Fallback extraction if AI fails - extracts meaningful sentences
+function extractKeyPointsFallback(content, maxPoints = 5) {
+  debug('Using fallback extraction for content');
+  
+  if (!content || content.length < 30) {
+    return '• Content not available';
+  }
+
+  // Split into sentences
+  const sentences = content
+    .split(/[.!?]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 20 && s.length < 200) // Meaningful length
+    .filter(s => !/^(figure|fig\.|table|tab\.|equation|eq\.)/i.test(s)); // Skip references to figures/tables
+
+  if (sentences.length === 0) {
+    // If no good sentences, extract any text
+    const words = content.split(/\s+/).slice(0, 15);
+    return `• ${words.join(' ')}...`;
+  }
+
+  // Prioritize sentences with important keywords
+  const importantKeywords = [
+    'propose', 'develop', 'demonstrate', 'show', 'achieve', 'improve', 'introduce',
+    'significant', 'important', 'novel', 'effective', 'efficient', 'accurate',
+    'result', 'finding', 'performance', 'accuracy', 'precision', 'recall',
+    'method', 'approach', 'model', 'algorithm', 'system', 'framework'
+  ];
+
+  const scoredSentences = sentences.map(sentence => {
+    let score = 0;
+    const lowerSentence = sentence.toLowerCase();
+    
+    // Score based on important keywords
+    for (const keyword of importantKeywords) {
+      if (lowerSentence.includes(keyword)) score += 2;
+    }
+    
+    // Prefer sentences with numbers (results)
+    if (/\d+\.?\d*%|\d+\.?\d*/.test(sentence)) score += 3;
+    
+    // Prefer medium-length sentences
+    if (sentence.length > 50 && sentence.length < 150) score += 1;
+    
+    return { sentence, score };
+  });
+
+  // Sort by score
+  scoredSentences.sort((a, b) => b.score - a.score);
+
+  // Take top sentences
+  const topSentences = scoredSentences
+    .slice(0, maxPoints)
+    .map(item => item.sentence);
+
+  // Format as bullets
+  return topSentences.map(s => {
+    const words = s.split(' ');
+    if (words.length > 15) {
+      s = words.slice(0, 15).join(' ') + '...';
+    }
+    return `• ${s}`;
+  }).join('\n\n');
+}
+
+// Extract title - multiple strategies for different paper formats (IMPROVED)
+function extractTitle(text) {
+  debug('Extracting title with improved logic...');
+  
+  // Strategy 1: Look for title in first 2000 characters
+  const firstPage = text.substring(0, 2000);
+  const lines = firstPage.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  
+  // Strategy 2: Try to find title using multiple patterns
+  const candidates = [];
+  
+  for (let i = 0; i < Math.min(lines.length, 30); i++) {
+    const line = lines[i];
+    
+    // Skip obvious non-title lines
+    if (/^(abstract|introduction|keywords|index terms|author[s]?:|©|ieee|springer|elsevier|arxiv|doi|issn|volume|vol\.|issue|pp\.|page[s]?|email|university|department|school|college|preprint|submitted|published|received|accepted|available)/i.test(line)) {
+      continue;
+    }
+    
+    // Skip very short lines (likely not a title)
+    if (line.length < 15) {
+      continue;
+    }
+    
+    // Skip very long lines (likely abstract or paragraph)
+    if (line.length > 250) {
+      continue;
+    }
+    
+    // Skip lines with too many numbers (likely metadata, dates, DOI)
+    const digitCount = (line.match(/\d/g) || []).length;
+    if (digitCount > 8) {
+      continue;
+    }
+    
+    // Skip lines that look like citations, references, or metadata
+    if (/^\[|\]$|^vol\.|^pp\.|^\d{4}$|^20\d{2}|@|\.edu|\.com|\.org|http/i.test(line)) {
+      continue;
+    }
+    
+    // Skip lines that are all uppercase and very short (likely section headers)
+    if (line === line.toUpperCase() && line.length < 30) {
+      continue;
+    }
+    
+    // Score potential title candidates
+    let score = 0;
+    
+    // Prefer lines with good title characteristics
+    if (line.length >= 30 && line.length <= 150) score += 10; // Good title length
+    if (/^[A-Z]/.test(line)) score += 5; // Starts with capital
+    if (line.includes(':')) score += 3; // Has subtitle separator
+    if (/[A-Z][a-z]+ [A-Z][a-z]+/.test(line)) score += 5; // Title case words
+    if (i < 5) score += (5 - i) * 2; // Earlier lines more likely
+    if (!/\d/.test(line)) score += 2; // No numbers is good
+    if (line.split(' ').length >= 5) score += 3; // Substantial word count
+    
+    // Penalize certain patterns
+    if (line.includes('University') || line.includes('Department')) score -= 5;
+    if (line.includes('@')) score -= 10;
+    if (/^\d/.test(line)) score -= 5; // Starts with number
+    
+    candidates.push({ line, score, index: i });
+  }
+  
+  // Sort by score descending
+  candidates.sort((a, b) => b.score - a.score);
+  
+  // Get best candidate
+  if (candidates.length > 0 && candidates[0].score > 5) {
+    const bestTitle = candidates[0].line;
+    debug(`Found title (score: ${candidates[0].score}): "${bestTitle}"`);
+    return bestTitle;
+  }
+  
+  // Strategy 3: Look for lines between position 0-10 that look like titles
+  for (let i = 0; i < Math.min(lines.length, 10); i++) {
+    const line = lines[i];
+    
+    // Must be substantial
+    if (line.length >= 20 && line.length <= 200) {
+      // Must not be obvious metadata
+      if (!/^(author|email|university|department|abstract|©)/i.test(line)) {
+        debug(`Using fallback title from position ${i}: "${line}"`);
+        return line;
+      }
+    }
+  }
+  
+  // Strategy 4: Find the longest line in first 15 lines (often the title)
+  const potentialTitles = lines.slice(0, 15).filter(l => 
+    l.length >= 20 && 
+    l.length <= 200 && 
+    !/^(author|email|abstract|introduction)/i.test(l)
+  );
+  
+  if (potentialTitles.length > 0) {
+    potentialTitles.sort((a, b) => b.length - a.length);
+    const longestTitle = potentialTitles[0];
+    debug(`Using longest line as title: "${longestTitle}"`);
+    return longestTitle;
+  }
+  
+  debug('Could not extract title, using default');
+  return 'Research Presentation';
+}
+
+// Extract authors - works with different formats (comma-separated, and, multiple lines)
+function extractAuthors(text) {
+  debug('Extracting authors...');
+  
+  const firstPage = text.substring(0, 2000);
+  
+  // Pattern 1: Look for "Authors:" or "By:" label
+  const labelMatch = firstPage.match(/(?:authors?|by)\s*:?\s*([A-Z][a-zA-Z\s,\.\-&]+?)(?:\n\n|Abstract|ABSTRACT|Email|Affiliation|Department)/i);
+  if (labelMatch) {
+    const authors = labelMatch[1].trim();
+    if (authors.length < 200) {
+      debug(`Found authors via label: "${authors}"`);
+      return authors;
+    }
+  }
+  
+  // Pattern 2: Look for lines with capitalized names (after title, before abstract)
+  const lines = firstPage.split('\n');
+  const titleLine = lines.findIndex(l => l.trim().length > 20);
+  const abstractLine = lines.findIndex(l => /abstract|introduction/i.test(l));
+  
+  if (titleLine >= 0 && abstractLine > titleLine) {
+    const candidateLines = lines.slice(titleLine + 1, abstractLine);
+    const authorLines = candidateLines.filter(line => {
+      const trimmed = line.trim();
+      // Look for lines with proper names (capitalized words)
+      return /^[A-Z][a-z]+\s+[A-Z]/.test(trimmed) && trimmed.length < 150;
+    });
+    
+    if (authorLines.length > 0) {
+      const authors = authorLines.slice(0, 3).join(', '); // Max 3 lines
+      debug(`Found authors via name pattern: "${authors}"`);
+      return authors;
+    }
+  }
+  
+  // Pattern 3: Look for email addresses and extract names before them
+  const emailMatch = firstPage.match(/([A-Z][a-zA-Z\s,\.]+?)\s*[\n\s]*(?:[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/);
+  if (emailMatch) {
+    debug(`Found authors via email: "${emailMatch[1]}"`);
+    return emailMatch[1].trim();
+  }
+  
+  return 'Research Team';
+}
+
+// Remove duplicate content across slides
+function removeDuplicateContent(slides) {
+  const seen = new Set();
+  
+  return slides.map(slide => {
+    if (slide.type === 'title') return slide;
+    
+    const bullets = slide.content.split('\n\n')
+      .filter(bullet => {
+        const normalized = bullet.toLowerCase()
+          .replace(/[•\-\*]/g, '')
+          .trim()
+          .substring(0, 50);
+        
+        if (seen.has(normalized)) {
+          return false;
+        }
+        seen.add(normalized);
+        return true;
+      });
+    
+    return {
+      ...slide,
+      content: bullets.join('\n\n')
+    };
+  }).filter(slide => slide.content && slide.content.length > 10);
+}
+
+// Format title slide with clean academic structure
+function formatTitleSlide(extractedData, detectedSections) {
+  const title = detectedSections.title || extractedData.sections.title || 'Research Presentation';
+  const authors = detectedSections.authors || extractedData.sections.authors || 'Research Team';
+  const institution = extractedData.sections.institution || extractedData.metadata?.institution || '';
+  const year = extractedData.metadata?.year || new Date().getFullYear();
+  
+  let titleContent = `${title}\n\n`;
+  titleContent += `${authors}\n\n`;
+  if (institution) {
+    titleContent += `${institution}\n\n`;
+  }
+  titleContent += `${year}`;
+  
+  return titleContent;
 }
 
 // Format abstract as structured bullet points
@@ -453,77 +1002,7 @@ function formatBulletPoints(points) {
   }).join('\n\n');
 }
 
-// Detect sections from text when standard sections aren't available
-function detectSectionsFromText(fullText, existingSections) {
-  const detected = {
-    title: existingSections.title || extractTitle(fullText),
-    authors: existingSections.authors || extractAuthors(fullText),
-    abstract: existingSections.abstract || extractSection(fullText, ['abstract']),
-    introduction: existingSections.introduction || extractSection(fullText, ['introduction', 'background']),
-    literatureReview: existingSections['literature review'] || existingSections['related work'] || 
-                     extractSection(fullText, ['literature review', 'related work', 'prior work']),
-    methodology: existingSections.methodology || existingSections.methods || 
-                extractSection(fullText, ['methodology', 'methods', 'approach', 'experimental setup']),
-    results: existingSections.results || existingSections['experimental results'] ||
-            extractSection(fullText, ['results', 'findings', 'experiments', 'evaluation']),
-    discussion: existingSections.discussion || existingSections.analysis ||
-               extractSection(fullText, ['discussion', 'analysis', 'interpretation']),
-    conclusion: existingSections.conclusion || existingSections.conclusions ||
-               extractSection(fullText, ['conclusion', 'conclusions', 'summary']),
-    additionalSections: extractAdditionalSections(fullText)
-  };
-  
-  return detected;
-}
-
-// Extract section content based on headings
-function extractSection(text, sectionNames) {
-  for (const sectionName of sectionNames) {
-    const pattern = new RegExp(`(?:^|\\n)\\s*(?:\\d+\\.?\\s*)?${sectionName}[\\s\\n]([\\s\\S]*?)(?=\\n\\s*(?:\\d+\\.?\\s*)?[A-Z][a-z]|$)`, 'i');
-    const match = text.match(pattern);
-    if (match && match[1]) {
-      return match[1].trim().substring(0, 2000); // Limit section length
-    }
-  }
-  return null;
-}
-
-// Extract additional sections from subheadings
-function extractAdditionalSections(text) {
-  const sections = {};
-  const headingPattern = /(?:^|\n)\s*(?:\d+\.?\s*)?([A-Z][a-zA-Z\s]{3,30})\s*\n([\s\S]*?)(?=\n\s*(?:\d+\.?\s*)?[A-Z][a-zA-Z\s]{3,30}\s*\n|$)/g;
-  
-  let match;
-  while ((match = headingPattern.exec(text)) !== null) {
-    const heading = match[1].trim().toLowerCase();
-    const content = match[2].trim();
-    
-    // Skip if it's a standard section or too short
-    if (!isStandardSection(heading) && content.length > 100) {
-      sections[heading] = content.substring(0, 1500);
-    }
-  }
-  
-  return sections;
-}
-
 // Helper functions
-function extractTitle(text) {
-  const lines = text.split('\n').slice(0, 10);
-  for (const line of lines) {
-    if (line.trim().length > 10 && line.trim().length < 150) {
-      return line.trim();
-    }
-  }
-  return 'Research Paper';
-}
-
-function extractAuthors(text) {
-  const authorPattern = /(?:authors?|by)\s*:?\s*([A-Z][a-zA-Z\s,\.\-]+)/i;
-  const match = text.match(authorPattern);
-  return match ? match[1].trim() : 'Research Team';
-}
-
 function isStandardSection(heading) {
   const standard = ['abstract', 'introduction', 'methodology', 'methods', 'results', 
                    'discussion', 'conclusion', 'references', 'acknowledgments'];

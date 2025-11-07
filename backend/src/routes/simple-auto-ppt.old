@@ -1,0 +1,594 @@
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const presentationService = require('../services/presentationService');
+const debug = require('debug')('researchai:simple-auto-ppt');
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed'), false);
+    }
+  }
+});
+
+// Temporary storage for presentations (use Redis in production)
+const tempPresentations = new Map();
+
+// Clean up old presentations (older than 1 hour)
+const cleanupTempPresentations = () => {
+  const oneHourAgo = Date.now() - (60 * 60 * 1000);
+  for (const [id, presentation] of tempPresentations.entries()) {
+    if (presentation.createdAt < oneHourAgo) {
+      tempPresentations.delete(id);
+      debug(`Cleaned up expired presentation: ${id}`);
+    }
+  }
+};
+
+// Health check
+router.get('/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    service: 'Enhanced Auto PPT Service',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Get available themes (deprecated - keeping for backward compatibility)
+router.get('/themes', (req, res) => {
+  res.json({
+    success: true,
+    themes: [
+      { id: 'professional', name: 'Professional', description: 'Academic blue theme' },
+      { id: 'minimal', name: 'Minimal', description: 'Clean minimal theme' }
+    ]
+  });
+});
+
+// Generate presentation from uploaded PDF - ENHANCED VERSION
+router.post('/generate-from-pdf', upload.single('pdf'), async (req, res) => {
+  try {
+    debug('Starting ENHANCED PDF to PPT generation...');
+    
+    if (!req.file) {
+      return res.status(400).json({
+        error: true,
+        message: 'No PDF file uploaded'
+      });
+    }
+
+    const { title } = req.body;
+    const pdfBuffer = req.file.buffer;
+    
+    debug('Processing PDF: %s (size: %d bytes)', title || req.file.originalname, pdfBuffer.length);
+    
+    // Use the ENHANCED presentation service
+    const presentation = await presentationService.generatePresentationFromPDF(
+      pdfBuffer,
+      title || req.file.originalname.replace('.pdf', '')
+    );
+    
+    debug('Generated %d professional slides', presentation.slides.length);
+    
+    // Export to PowerPoint buffer
+    const buffer = await presentationService.exportToPowerPoint(presentation);
+    
+    // Generate a unique download ID
+    const downloadId = Date.now().toString();
+    
+    // Store presentation for download
+    tempPresentations.set(downloadId, {
+      buffer,
+      filename: `${(title || 'presentation').replace(/[^a-zA-Z0-9]/g, '_')}.pptx`,
+      createdAt: Date.now()
+    });
+    
+    // Clean up old presentations
+    cleanupTempPresentations();
+    
+    // Return response with presentation metadata and download link
+    res.json({
+      success: true,
+      message: 'Professional presentation generated successfully',
+      presentation: {
+        title: presentation.title,
+        totalSlides: presentation.slides.length,
+        metadata: presentation.metadata,
+        slides: presentation.slides.map(slide => ({
+          title: slide.title,
+          layout: slide.layout,
+          bulletCount: slide.content?.bullets?.length || 0
+        }))
+      },
+      downloadSize: buffer.length,
+      downloadUrl: `/api/auto-ppt/download/${downloadId}`,
+      downloadId
+    });
+    
+  } catch (error) {
+    debug('Error generating presentation:', error);
+    res.status(500).json({
+      error: true,
+      message: `Failed to generate presentation: ${error.message}`,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// Generate presentation from text content - Coming Soon
+router.post('/generate-from-text', async (req, res) => {
+  try {
+    res.status(501).json({
+      success: false,
+      message: 'Text-to-PPT generation coming soon. Please use PDF upload for now.'
+    });
+  } catch (error) {
+    debug('Error:', error);
+    res.status(500).json({
+      error: true,
+      message: `Failed to generate presentation: ${error.message}`
+    });
+  }
+});
+
+// Download generated presentation - NO AUTH REQUIRED
+router.get('/download/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    debug(`Download request for ID: ${id}`);
+    debug(`Available presentations:`, Array.from(tempPresentations.keys()));
+    
+    const presentation = tempPresentations.get(id);
+    if (!presentation) {
+      debug(`Presentation not found for ID: ${id}`);
+      return res.status(404).json({
+        error: true,
+        message: 'Presentation not found or expired'
+      });
+    }
+
+    debug(`Sending presentation: ${presentation.filename}, size: ${presentation.buffer.length}`);
+
+    // Set headers for file download
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    res.setHeader('Content-Disposition', `attachment; filename="${presentation.filename}"`);
+    res.setHeader('Content-Length', presentation.buffer.length);
+    
+    // Send the file
+    res.send(presentation.buffer);
+    
+    // Remove from temp storage after download
+    tempPresentations.delete(id);
+
+  } catch (error) {
+    debug('Error downloading presentation:', error);
+    res.status(500).json({
+      error: true,
+      message: 'Failed to download presentation'
+    });
+  }
+});
+
+module.exports = router;
+  
+  // Title slide
+  slides.push({
+    type: 'title',
+    title: extractedData.sections.title || 'Research Presentation',
+    content: formatTitleSlide(extractedData)
+  });
+
+  const sections = extractedData.sections;
+  const fullText = extractedData.fullText || '';
+  
+  // If standard sections don't exist, extract from subheadings
+  const detectedSections = detectSectionsFromText(fullText, sections);
+  
+  // Abstract slide with bullet points
+  if (detectedSections.abstract) {
+    slides.push({
+      type: 'content',
+      title: 'Abstract',
+      content: formatAbstractSlide(detectedSections.abstract),
+      hasImagePlaceholder: false
+    });
+  }
+
+  // Introduction with key points
+  if (detectedSections.introduction) {
+    const introSlides = createStructuredSlides('Introduction', detectedSections.introduction, 5);
+    slides.push(...introSlides);
+  }
+
+  // Literature Review / Related Work
+  if (detectedSections.literatureReview) {
+    const litSlides = createStructuredSlides('Literature Review', detectedSections.literatureReview, 4);
+    slides.push(...litSlides);
+  }
+
+  // Methodology with structured points
+  if (detectedSections.methodology) {
+    const methodSlides = createStructuredSlides('Methodology', detectedSections.methodology, 5, true);
+    slides.push(...methodSlides);
+  }
+
+  // Results with image placeholders
+  if (detectedSections.results) {
+    const resultSlides = createStructuredSlides('Results', detectedSections.results, 4, true);
+    slides.push(...resultSlides);
+  }
+
+  // Discussion
+  if (detectedSections.discussion) {
+    const discussionSlides = createStructuredSlides('Discussion', detectedSections.discussion, 4);
+    slides.push(...discussionSlides);
+  }
+
+  // Conclusion with key takeaways
+  if (detectedSections.conclusion) {
+    slides.push({
+      type: 'content',
+      title: 'Conclusion',
+      content: formatConclusionSlide(detectedSections.conclusion),
+      hasImagePlaceholder: false
+    });
+  }
+
+  // Process any additional subheadings found
+  for (const [key, content] of Object.entries(detectedSections.additionalSections)) {
+    if (content && content.length > 100) {
+      const additionalSlides = createStructuredSlides(
+        formatSectionTitle(key), 
+        content, 
+        4, 
+        isResultsRelated(key)
+      );
+      slides.push(...additionalSlides);
+    }
+  }
+
+  // Ensure minimum slides and add summary if needed
+  if (slides.length < 8) {
+    slides.push({
+      type: 'content',
+      title: 'Key Contributions',
+      content: generateKeyContributions(extractedData),
+      hasImagePlaceholder: false
+    });
+  }
+
+  debug(`Generated ${slides.length} structured slides from paper content`);
+  return slides;
+}
+
+// Format title slide with clean structure
+function formatTitleSlide(extractedData) {
+  const authors = extractedData.sections.authors || 'Research Team';
+  const institution = extractedData.sections.institution || 'Academic Institution';
+  const date = extractedData.sections.date || new Date().getFullYear();
+  
+  return `${authors}\n\n${institution}\n\n${date}\n\n${extractedData.sections.abstract ? 
+    extractedData.sections.abstract.substring(0, 150) + '...' : 
+    'Academic Research Presentation'}`;
+}
+
+// Format abstract as structured bullet points
+function formatAbstractSlide(abstract) {
+  if (!abstract) return '';
+  
+  // Split into key points
+  const sentences = abstract.split(/[.!?]+/).filter(s => s.trim().length > 20);
+  const keyPoints = sentences.slice(0, 5).map(s => s.trim());
+  
+  return keyPoints.map(point => `• ${point}`).join('\n\n');
+}
+
+// Format conclusion with key takeaways
+function formatConclusionSlide(conclusion) {
+  if (!conclusion) return '';
+  
+  const sentences = conclusion.split(/[.!?]+/).filter(s => s.trim().length > 15);
+  const keyTakeaways = sentences.slice(0, 4).map(s => s.trim());
+  
+  let formatted = '🎯 Key Takeaways:\n\n';
+  formatted += keyTakeaways.map(point => `• ${point}`).join('\n\n');
+  
+  return formatted;
+}
+
+// Create structured slides with bullet points
+function createStructuredSlides(title, content, maxPoints = 5, addImagePlaceholder = false) {
+  const slides = [];
+  
+  if (!content || content.length < 50) return slides;
+  
+  // Extract key points from content
+  const keyPoints = extractKeyPoints(content, maxPoints);
+  
+  if (keyPoints.length <= maxPoints) {
+    // Single slide
+    slides.push({
+      type: 'content',
+      title: title,
+      content: formatBulletPoints(keyPoints),
+      hasImagePlaceholder: addImagePlaceholder
+    });
+  } else {
+    // Multiple slides
+    const chunkedPoints = chunkArray(keyPoints, maxPoints);
+    chunkedPoints.forEach((chunk, index) => {
+      slides.push({
+        type: 'content',
+        title: chunkedPoints.length > 1 ? `${title} (${index + 1})` : title,
+        content: formatBulletPoints(chunk),
+        hasImagePlaceholder: addImagePlaceholder && index === 0
+      });
+    });
+  }
+  
+  return slides;
+}
+
+// Extract key points from text content
+function extractKeyPoints(content, maxPoints = 5) {
+  const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 30);
+  
+  // Prioritize sentences with important keywords
+  const importantKeywords = [
+    'significant', 'important', 'key', 'main', 'primary', 'major', 'critical',
+    'demonstrate', 'show', 'indicate', 'suggest', 'reveal', 'found', 'results',
+    'conclusion', 'findings', 'evidence', 'analysis', 'method', 'approach'
+  ];
+  
+  const scoredSentences = sentences.map(sentence => {
+    const score = importantKeywords.reduce((score, keyword) => {
+      return score + (sentence.toLowerCase().includes(keyword) ? 1 : 0);
+    }, 0);
+    return { sentence: sentence.trim(), score };
+  });
+  
+  // Sort by score and length preference
+  scoredSentences.sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score;
+    return Math.abs(a.sentence.length - 100) - Math.abs(b.sentence.length - 100);
+  });
+  
+  return scoredSentences.slice(0, maxPoints * 2).map(item => item.sentence);
+}
+
+// Format as bullet points
+function formatBulletPoints(points) {
+  if (!points || points.length === 0) return '';
+  
+  return points.map(point => {
+    const cleanPoint = point.trim();
+    if (cleanPoint.length > 120) {
+      // Truncate very long points
+      return `• ${cleanPoint.substring(0, 115)}...`;
+    }
+    return `• ${cleanPoint}`;
+  }).join('\n\n');
+}
+
+// Detect sections from text when standard sections aren't available
+function detectSectionsFromText(fullText, existingSections) {
+  const detected = {
+    title: existingSections.title || extractTitle(fullText),
+    authors: existingSections.authors || extractAuthors(fullText),
+    abstract: existingSections.abstract || extractSection(fullText, ['abstract']),
+    introduction: existingSections.introduction || extractSection(fullText, ['introduction', 'background']),
+    literatureReview: existingSections['literature review'] || existingSections['related work'] || 
+                     extractSection(fullText, ['literature review', 'related work', 'prior work']),
+    methodology: existingSections.methodology || existingSections.methods || 
+                extractSection(fullText, ['methodology', 'methods', 'approach', 'experimental setup']),
+    results: existingSections.results || existingSections['experimental results'] ||
+            extractSection(fullText, ['results', 'findings', 'experiments', 'evaluation']),
+    discussion: existingSections.discussion || existingSections.analysis ||
+               extractSection(fullText, ['discussion', 'analysis', 'interpretation']),
+    conclusion: existingSections.conclusion || existingSections.conclusions ||
+               extractSection(fullText, ['conclusion', 'conclusions', 'summary']),
+    additionalSections: extractAdditionalSections(fullText)
+  };
+  
+  return detected;
+}
+
+// Extract section content based on headings
+function extractSection(text, sectionNames) {
+  for (const sectionName of sectionNames) {
+    const pattern = new RegExp(`(?:^|\\n)\\s*(?:\\d+\\.?\\s*)?${sectionName}[\\s\\n]([\\s\\S]*?)(?=\\n\\s*(?:\\d+\\.?\\s*)?[A-Z][a-z]|$)`, 'i');
+    const match = text.match(pattern);
+    if (match && match[1]) {
+      return match[1].trim().substring(0, 2000); // Limit section length
+    }
+  }
+  return null;
+}
+
+// Extract additional sections from subheadings
+function extractAdditionalSections(text) {
+  const sections = {};
+  const headingPattern = /(?:^|\n)\s*(?:\d+\.?\s*)?([A-Z][a-zA-Z\s]{3,30})\s*\n([\s\S]*?)(?=\n\s*(?:\d+\.?\s*)?[A-Z][a-zA-Z\s]{3,30}\s*\n|$)/g;
+  
+  let match;
+  while ((match = headingPattern.exec(text)) !== null) {
+    const heading = match[1].trim().toLowerCase();
+    const content = match[2].trim();
+    
+    // Skip if it's a standard section or too short
+    if (!isStandardSection(heading) && content.length > 100) {
+      sections[heading] = content.substring(0, 1500);
+    }
+  }
+  
+  return sections;
+}
+
+// Helper functions
+function extractTitle(text) {
+  const lines = text.split('\n').slice(0, 10);
+  for (const line of lines) {
+    if (line.trim().length > 10 && line.trim().length < 150) {
+      return line.trim();
+    }
+  }
+  return 'Research Paper';
+}
+
+function extractAuthors(text) {
+  const authorPattern = /(?:authors?|by)\s*:?\s*([A-Z][a-zA-Z\s,\.\-]+)/i;
+  const match = text.match(authorPattern);
+  return match ? match[1].trim() : 'Research Team';
+}
+
+function isStandardSection(heading) {
+  const standard = ['abstract', 'introduction', 'methodology', 'methods', 'results', 
+                   'discussion', 'conclusion', 'references', 'acknowledgments'];
+  return standard.some(s => heading.includes(s));
+}
+
+function isResultsRelated(heading) {
+  const resultsKeywords = ['result', 'finding', 'experiment', 'evaluation', 'performance', 'analysis'];
+  return resultsKeywords.some(keyword => heading.toLowerCase().includes(keyword));
+}
+
+function formatSectionTitle(title) {
+  return title.charAt(0).toUpperCase() + title.slice(1).replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+function generateKeyContributions(extractedData) {
+  const contributions = [
+    '• Novel approach to addressing research challenges',
+    '• Comprehensive analysis of existing methodologies', 
+    '• Significant findings that advance the field',
+    '• Practical implications for future research'
+  ];
+  
+  return contributions.join('\n\n');
+}
+
+function chunkArray(array, size) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
+// Helper function to split long content into manageable chunks
+function splitContent(content, maxLength = 800) {
+  const parts = [];
+  const sentences = content.split(/[.!?]+/);
+  let currentPart = '';
+  
+  for (const sentence of sentences) {
+    if (currentPart.length + sentence.length + 1 <= maxLength) {
+      currentPart += sentence + '.';
+    } else {
+      if (currentPart) {
+        parts.push(currentPart.trim());
+      }
+      currentPart = sentence + '.';
+    }
+  }
+  
+  if (currentPart) {
+    parts.push(currentPart.trim());
+  }
+  
+  return parts.length > 0 ? parts : [content];
+}
+
+// Helper function to add more detailed slides
+function addDetailedSlides(slides, extractedData) {
+  // Add objectives slide if we can extract objectives
+  const content = extractedData.fullText || '';
+  
+  // Look for objectives, aims, or goals
+  const objectivesMatch = content.match(/(?:objectives?|aims?|goals?)[:\s]+(.*?)(?:\n\n|\. [A-Z]|$)/i);
+  if (objectivesMatch) {
+    slides.splice(2, 0, {
+      type: 'content',
+      title: 'Objectives',
+      content: objectivesMatch[1].trim()
+    });
+  }
+  
+  // Add key findings slide if we can extract them
+  const findingsMatch = content.match(/(?:key findings?|main results?|findings)[:\s]+(.*?)(?:\n\n|\. [A-Z]|$)/i);
+  if (findingsMatch) {
+    slides.push({
+      type: 'content',
+      title: 'Key Findings',
+      content: findingsMatch[1].trim()
+    });
+  }
+}
+
+// Helper function to process text content and extract structure
+async function processTextContent(content) {
+  const sections = {};
+  const lines = content.split('\n');
+  let currentSection = '';
+  let currentContent = '';
+  
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    
+    // Check if line is a section header
+    if (isLikelySectionHeader(trimmedLine)) {
+      // Save previous section
+      if (currentSection && currentContent) {
+        sections[currentSection.toLowerCase()] = currentContent.trim();
+      }
+      
+      // Start new section
+      currentSection = trimmedLine.replace(/^\d+\.?\s*/, '').replace(/[:.]/g, '');
+      currentContent = '';
+    } else if (trimmedLine) {
+      currentContent += trimmedLine + '\n';
+    }
+  }
+  
+  // Save last section
+  if (currentSection && currentContent) {
+    sections[currentSection.toLowerCase()] = currentContent.trim();
+  }
+  
+  // If no clear sections found, treat as single content
+  if (Object.keys(sections).length === 0) {
+    sections.content = content;
+  }
+  
+  return {
+    sections,
+    fullText: content,
+    metadata: {
+      totalLength: content.length,
+      estimatedReadingTime: Math.ceil(content.split(' ').length / 200)
+    }
+  };
+}
+
+// Helper function to identify section headers
+function isLikelySectionHeader(line) {
+  const headerPatterns = [
+    /^(abstract|introduction|methodology|methods|results|discussion|conclusion|references|acknowledgments)/i,
+    /^\d+\.?\s+(abstract|introduction|methodology|methods|results|discussion|conclusion)/i,
+    /^[A-Z][A-Z\s]{2,20}$/,
+    /^\d+\.\s*[A-Z][a-z\s]{3,50}$/
+  ];
+  
+  return headerPatterns.some(pattern => pattern.test(line.trim()));
+}
+
+module.exports = router;
